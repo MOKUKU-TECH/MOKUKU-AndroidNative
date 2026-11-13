@@ -2,7 +2,8 @@
 
 PR #1 establishes the visual style and screen flows for the original two-eye
 ESP32-S3 MOKUKU. It contains an interactive browser prototype with sample data.
-The Android starter app remains the buildable base for implementation after design review.
+The native Android app now implements these flows with the original device protocol;
+the browser prototype remains a sample-data design reference.
 
 Open `index.html` directly in a browser; no server, dependencies, or internet access
 are needed. The desktop controls jump between screens and connection states.
@@ -15,6 +16,11 @@ Screen previews: [Home](previews/home.png), [Data Collection](previews/data-coll
 [Tools](previews/tools.png), [Updates](previews/updates.png),
 [Debug](previews/debug.png), [Simulation](previews/simulation.png),
 and [Trips](previews/trips.png).
+
+Native Android previews, rendered with Robolectric in the disconnected state:
+[Home](previews/native-home.png), [320 dp Home](previews/native-home-small.png),
+[Tools](previews/native-tools.png), and [Updates](previews/native-updates.png).
+These validate layout only; they do not demonstrate a hardware connection.
 
 ## Direction: quiet technology
 

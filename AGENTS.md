@@ -11,8 +11,8 @@ Read [README.md](README.md) before working. For UI changes, read
 [design/README.md](design/README.md); for BLE and device actions, read
 [design/PROTOCOL_MAP.md](design/PROTOCOL_MAP.md).
 
-The current Android app is a Java/XML starter. `design/` contains an offline
-browser prototype with sample data. Keep prototype interactions clearly labeled;
+The Android app uses native Java/XML UI and the original BLE protocol. `design/`
+contains an offline browser prototype with sample data. Keep prototype interactions clearly labeled;
 do not present sample connections, settings, downloads, or commands as real device
 operations. Implement native features only within the requested task's scope.
 
@@ -27,8 +27,10 @@ still needs firmware or hardware verification rather than guessing.
 | Path | Purpose |
 |---|---|
 | `app/` | Native Android manifest, Java code, and XML resources. |
+| `app/src/main/java/com/mokuku/debug/` | `MainActivity`/`Ui` for screens, `MokukuConnection` for BLE/file operations, and `MokukuProtocol` for byte framing/validation. |
+| `app/src/test/` | Protocol fixtures and native UI/lifecycle checks. |
 | `design/` | Style guide, screen flows, protocol map, and HTML/CSS/JavaScript prototype. |
-| `design/previews/` | Screenshots rendered from the prototype. |
+| `design/previews/` | Browser prototype screenshots and labeled native Android renders. |
 | `gradle/`, `gradlew`, `gradlew.bat` | Checked-in Gradle wrapper. |
 | `scripts/build.sh` | Build, lint, export, and optional installation helper. |
 | `.github/workflows/android.yml` | GitHub Actions APK build and artifact upload. |
@@ -63,10 +65,14 @@ configuration as described in the README.
 ./scripts/build.sh
 ```
 
-This runs `:app:assembleDebug` and `:app:lintDebug`, then exports
+This runs `:app:assembleDebug`, `:app:testDebugUnitTest`, and `:app:lintDebug`, then exports
 `output/mokuku-debug.apk`. Install on a device only when requested, using
 `./scripts/build.sh --install`. Docker is optional for Android builds; firmware
 container instructions in the parent repository concern firmware changes.
+
+Supply legacy recording access through the `MOKUKU_ACCESS_CODE` build environment
+and matching Actions secret. Do not commit its value. Keep file transfer and
+storage work off the UI thread and preserve queued GATT operation ordering.
 
 For Android or build configuration changes, run the build helper. For prototype
 JavaScript changes, run `node --check design/app.js` and exercise the affected
