@@ -552,6 +552,7 @@ final class MokukuConnection {
         if (localFiles == null) return;
         for (File local : localFiles) {
             if (local.isFile() && MokukuProtocol.isRecordingName(local.getName())) downloads.put(local.getName(), local);
+            else if (local.isFile() && local.getName().startsWith("download-") && local.getName().endsWith(".partial")) local.delete();
         }
     }
 
