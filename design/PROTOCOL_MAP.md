@@ -47,11 +47,13 @@ design screenshots.
 
 Set date/time by writing the existing 11-byte data packet on **Transfer Data**:
 `01 speed rpm_high rpm_low fuel timestamp_LE32 backlight command`.
+The native app encodes the selected local calendar fields as UTC-based seconds,
+with speed 255, RPM/fuel 0, backlight 0, and command 0. This preserves the selected
+wall-clock time without inventing vehicle data. Hardware verification is pending.
 The firmware uses this value both modulo 86400 for its clock and through `localtime`
 for its debug calendar date when GPS has no fix. The existing desktop time-sync
 helper sends local seconds since midnight, which does not encode a selected calendar
-date. A date-setting implementation must define the epoch/timezone encoding and
-verify both clock and calendar behavior on hardware; it cannot reuse that helper
+date. Verify both clock and calendar behavior on hardware; the app does not reuse that helper
 unchanged. Zero timestamp is ignored; zero backlight does not
 change brightness. This packet also updates speed/RPM/fuel, so the date action must
 define those values deliberately rather than sending an unrelated command packet.

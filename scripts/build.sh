@@ -9,7 +9,7 @@ fi
 repository_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repository_root"
 
-./gradlew --no-daemon :app:assembleDebug :app:lintDebug
+./gradlew --no-daemon :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
 mkdir -p output
 cp app/build/outputs/apk/debug/app-debug.apk output/mokuku-debug.apk
 echo "APK: $repository_root/output/mokuku-debug.apk"
