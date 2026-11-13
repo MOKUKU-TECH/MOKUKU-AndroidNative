@@ -4,6 +4,15 @@ Native Android debug app for MOKUKU, using the Java/XML and Gradle structure of
 `MobiliAndroidHUD`. The base contains one launch screen; BLE communication and
 device controls are not implemented yet.
 
+## App design
+
+The [first design proposal](design/README.md) covers the original two-eye MOKUKU:
+four tabs: Home (with Simulation), Data Collection, Trips (coming later), and Tools
+(with Updates and Debug).
+Open [the interactive prototype](design/index.html) in a browser to review the
+dark charcoal and mint style. Every device value and interaction in it is sample
+data; it uses no Bluetooth or network access. The Android starter remains unchanged.
+
 ## Build
 
 Use JDK 17 and an Android SDK with these packages:
@@ -47,6 +56,7 @@ write the APK to the same `output/` directory on the host.
 | Path | Purpose |
 |---|---|
 | `app/` | Native Android application: manifest, Java activity, XML resources. |
+| `design/` | Visual style, screen flows, original-MOKUKU protocol map, and interactive prototype. |
 | `gradle/`, `gradlew`, `gradlew.bat` | Gradle wrapper for Linux, macOS, and Windows. |
 | `scripts/build.sh` | Build, lint, export, and optionally install the debug APK. |
 | `artifacts/docker/dev.dockerfile` | Android build environment. |
@@ -55,5 +65,5 @@ write the APK to the same `output/` directory on the host.
 GitHub Actions runs `scripts/build.sh` on pushes, pull requests, and manual runs,
 then uploads `mokuku-debug.apk` as a workflow artifact.
 
-Protocol references in the parent `MobiliMOKUKU` repository:
-`doc/BLE_CONTROL.md` (MOKUKU) and `doc/MOKUKU_II_BLE_CONTROL.md` (MOKUKU II).
+The app targets the original MOKUKU. See `doc/BLE_CONTROL.md` in the parent
+`MobiliMOKUKU` repository and the checked [protocol map](design/PROTOCOL_MAP.md).
