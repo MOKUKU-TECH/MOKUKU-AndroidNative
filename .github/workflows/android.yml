@@ -2,7 +2,20 @@ name: Android debug APK
 
 on:
   push:
+    branches: ['**']
+    paths: &android_build_paths
+      - 'app/**'
+      - 'build.gradle'
+      - 'settings.gradle'
+      - 'gradle.properties'
+      - 'gradle/**'
+      - 'gradlew'
+      - 'gradlew.bat'
+      - 'scripts/build.sh'
+      - '.github/workflows/android.yml'
+      - '!**.md'
   pull_request:
+    paths: *android_build_paths
   workflow_dispatch:
 
 permissions:
@@ -18,6 +31,8 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
       - uses: gradle/actions/setup-gradle@v4
       - name: Install Android SDK packages
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0"

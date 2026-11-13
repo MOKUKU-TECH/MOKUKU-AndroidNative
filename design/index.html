@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>MOKUKU · Companion app design</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <div class="design-board">
+    <aside class="introduction">
+      <a class="wordmark" href="README.md">MOKUKU<span>COMPANION</span></a>
+      <div class="edition"><span></span> DESIGN DIRECTION / 01</div>
+      <h1>A little tech.<br>A little <em>calm.</em></h1>
+      <p class="lead">A quiet place to connect with your dashboard companion. Familiar controls. Room to breathe.</p>
+      <div class="swatches" aria-label="App color palette">
+        <div><i style="background:#0c1218"></i><span>Canvas</span><code>0C1218</code></div>
+        <div><i style="background:#1d2934"></i><span>Slate</span><code>1D2934</code></div>
+        <div><i style="background:#9ad8c2"></i><span>Mint</span><code>9AD8C2</code></div>
+        <div><i style="background:#e4ba83"></i><span>Warmth</span><code>E4BA83</code></div>
+      </div>
+      <div class="design-note"><span>THE FEEL</span><p>Soft corners. Clear words. A small pair of eyes. Technology that feels at home.</p></div>
+      <p class="scope">Original MOKUKU · two ESP32-S3 eyes<br>Interactive design · sample data only</p>
+    </aside>
+
+    <section class="phone" aria-label="Interactive Android app prototype">
+      <div class="system-bar" aria-hidden="true"><span>9:41</span><span class="preview-badge">PREVIEW</span><span>▂▄▆ &nbsp; ▰</span></div>
+      <div id="app-heading"></div>
+      <main id="screen" tabindex="-1" aria-label="App screen"></main>
+      <nav id="bottom-navigation" aria-label="App tabs"></nav>
+      <div class="gesture-bar" aria-hidden="true"></div>
+      <div id="toast" role="status" aria-live="polite"></div>
+      <dialog id="sheet" aria-labelledby="sheet-title"></dialog>
+    </section>
+
+    <aside class="review-panel">
+      <p class="eyebrow">EXPLORE THE APP</p>
+      <h2>One companion.<br>Four simple tabs.</h2>
+      <div class="screen-links" aria-label="Preview screens">
+        <button data-preview="disconnected"><span>01</span> Home · discovery</button>
+        <button data-preview="home"><span>02</span> Home · connected</button>
+        <button data-preview="simulation"><span>03</span> Simulation</button>
+        <button data-preview="records"><span>04</span> Data Collection</button>
+        <button data-preview="trips"><span>05</span> Trips · coming later</button>
+        <button data-preview="tools"><span>06</span> Tools</button>
+        <button data-preview="updates"><span>07</span> Updates</button>
+        <button data-preview="debug"><span>08</span> Debug</button>
+      </div>
+      <div class="review-note"><span class="tiny-dot"></span><p>Try finding a device, opening a subpage, or downloading a sample recording.</p></div>
+      <a class="spec-link" href="README.md">Read the design specification ↗</a>
+    </aside>
+  </div>
+</body>
+</html>

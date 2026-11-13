@@ -4,6 +4,15 @@ Native Android debug app for MOKUKU, using the Java/XML and Gradle structure of
 `MobiliAndroidHUD`. The base contains one launch screen; BLE communication and
 device controls are not implemented yet.
 
+## App design
+
+The [first design proposal](design/README.md) covers the original two-eye MOKUKU:
+four tabs: Home (with Simulation), Data Collection, Trips (coming later), and Tools
+(with Updates and Debug).
+Open [the interactive prototype](design/index.html) in a browser to review the
+dark charcoal and mint style. Every device value and interaction in it is sample
+data; it uses no Bluetooth or network access. The Android starter remains unchanged.
+
 ## Build
 
 Use JDK 17 and an Android SDK with these packages:
@@ -46,14 +55,21 @@ write the APK to the same `output/` directory on the host.
 
 | Path | Purpose |
 |---|---|
+| `AGENTS.md` | Repository scope, design conventions, build checks, and contributor workflow for coding agents. |
 | `app/` | Native Android application: manifest, Java activity, XML resources. |
+| `design/` | Visual style, screen flows, original-MOKUKU protocol map, and interactive prototype. |
 | `gradle/`, `gradlew`, `gradlew.bat` | Gradle wrapper for Linux, macOS, and Windows. |
 | `scripts/build.sh` | Build, lint, export, and optionally install the debug APK. |
 | `artifacts/docker/dev.dockerfile` | Android build environment. |
 | `.github/workflows/android.yml` | GitHub Actions build, lint, and APK artifact upload. |
 
-GitHub Actions runs `scripts/build.sh` on pushes, pull requests, and manual runs,
-then uploads `mokuku-debug.apk` as a workflow artifact.
+GitHub Actions runs `scripts/build.sh` for branch pushes and pull requests that
+change `app/`, the Gradle build files/wrapper, the build helper, or the APK workflow
+itself. Markdown and changes confined to documentation or `design/` do not trigger
+an APK build. Manual runs remain available. Successful builds upload
+`mokuku-debug.apk` as a workflow artifact. The shared
+[path filter](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#onpushpull_requestpull_request_targetpathspaths-ignore)
+keeps push and PR triggers consistent.
 
-Protocol references in the parent `MobiliMOKUKU` repository:
-`doc/BLE_CONTROL.md` (MOKUKU) and `doc/MOKUKU_II_BLE_CONTROL.md` (MOKUKU II).
+The app targets the original MOKUKU. See `doc/BLE_CONTROL.md` in the parent
+`MobiliMOKUKU` repository and the checked [protocol map](design/PROTOCOL_MAP.md).
