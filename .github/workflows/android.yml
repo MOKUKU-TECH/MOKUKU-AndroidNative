@@ -2,7 +2,20 @@ name: Android debug APK
 
 on:
   push:
+    branches: ['**']
+    paths: &android_build_paths
+      - 'app/**'
+      - 'build.gradle'
+      - 'settings.gradle'
+      - 'gradle.properties'
+      - 'gradle/**'
+      - 'gradlew'
+      - 'gradlew.bat'
+      - 'scripts/build.sh'
+      - '.github/workflows/android.yml'
+      - '!**.md'
   pull_request:
+    paths: *android_build_paths
   workflow_dispatch:
 
 permissions:

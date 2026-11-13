@@ -55,6 +55,7 @@ write the APK to the same `output/` directory on the host.
 
 | Path | Purpose |
 |---|---|
+| `AGENTS.md` | Repository scope, design conventions, build checks, and contributor workflow for coding agents. |
 | `app/` | Native Android application: manifest, Java activity, XML resources. |
 | `design/` | Visual style, screen flows, original-MOKUKU protocol map, and interactive prototype. |
 | `gradle/`, `gradlew`, `gradlew.bat` | Gradle wrapper for Linux, macOS, and Windows. |
@@ -62,8 +63,13 @@ write the APK to the same `output/` directory on the host.
 | `artifacts/docker/dev.dockerfile` | Android build environment. |
 | `.github/workflows/android.yml` | GitHub Actions build, lint, and APK artifact upload. |
 
-GitHub Actions runs `scripts/build.sh` on pushes, pull requests, and manual runs,
-then uploads `mokuku-debug.apk` as a workflow artifact.
+GitHub Actions runs `scripts/build.sh` for branch pushes and pull requests that
+change `app/`, the Gradle build files/wrapper, the build helper, or the APK workflow
+itself. Markdown and changes confined to documentation or `design/` do not trigger
+an APK build. Manual runs remain available. Successful builds upload
+`mokuku-debug.apk` as a workflow artifact. The shared
+[path filter](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#onpushpull_requestpull_request_targetpathspaths-ignore)
+keeps push and PR triggers consistent.
 
 The app targets the original MOKUKU. See `doc/BLE_CONTROL.md` in the parent
 `MobiliMOKUKU` repository and the checked [protocol map](design/PROTOCOL_MAP.md).

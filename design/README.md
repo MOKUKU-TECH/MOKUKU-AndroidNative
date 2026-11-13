@@ -88,11 +88,16 @@ remain visible with **Last received** labeling until a new query succeeds.
 
 ## Tools → Updates
 
-Group **Wi-Fi name**, **Wi-Fi password**, and **Remote base URL** above the update
-actions. Password is masked, has a reveal control, is never logged, and is not
+Use separate **Wi-Fi** and **Remote URL** cards above the update actions. Wi-Fi
+contains the network name, password, and **Save Wi-Fi** button; Remote URL contains
+the base URL and its own **Save remote URL** button. Each form validates and saves
+independently, so changing the URL does not require re-entering Wi-Fi credentials.
+Password is masked, has a reveal control, is never logged, and is not
 prefilled from a device query. These settings are write-only in the original
 protocol. Label fields as entries to send, and show each save result independently;
-never call an unacknowledged write “saved.” Validate UTF-8 byte lengths against the
+Wi-Fi succeeds only after both name and password writes are acknowledged. Report
+either field's failure without implying both were saved. The URL has its own
+acknowledgement. Never call an unacknowledged write “saved.” Validate UTF-8 byte lengths against the
 firmware's buffers, not just the protocol's 255-byte envelope.
 
 Use separate cards for **Firmware OTA**, **Voice model**, **Meme assets**, and

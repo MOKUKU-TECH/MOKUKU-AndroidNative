@@ -20,6 +20,7 @@ const paths = {
   more: '<circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/>',
   trash: '<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/>',
   wifi: '<path d="M3 8a14 14 0 0 1 18 0M6 12a9 9 0 0 1 12 0m-9 4a4 4 0 0 1 6 0"/><circle cx="12" cy="20" r="1"/>',
+  link: '<path d="m10 13 4-4M8 16l-1 1a4 4 0 0 1-6-6l5-5a4 4 0 0 1 6 0m0 2 1-1a4 4 0 0 1 6 6l-5 5a4 4 0 0 1-6 0"/>',
   undo: '<path d="M4 10h10a6 6 0 0 1 0 12M4 10l6-6m-6 6 6 6"/>',
   check: '<path d="m5 12 4 4L19 6"/>',
   eye: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7"/><circle cx="12" cy="12" r="3"/>',
@@ -101,14 +102,20 @@ function tools() {
 
 function updates() {
   return `${subpageIntro("Keep the good going.", "A fresh update for your little companion.")}
-    <form id="connection-settings" class="card">
-      <div class="card-heading"><span class="icon-tile">${icon("wifi")}</span><div><h3>Wi-Fi & remote</h3><p>MOKUKU downloads updates over Wi-Fi.</p></div></div>
+    <form id="wifi-settings" class="card">
+      <div class="card-heading"><span class="icon-tile">${icon("wifi")}</span><div><h3>Wi-Fi</h3><p>MOKUKU downloads updates over Wi-Fi.</p></div></div>
       <label class="field">Wi-Fi name<input name="wifi-name" type="text" placeholder="Enter network name" autocomplete="off" required ${state.connected ? "" : "disabled"}></label>
       <label class="field">Wi-Fi password<span class="password-field"><input id="wifi-password" name="wifi-password" type="password" placeholder="Enter network password" autocomplete="off" required ${state.connected ? "" : "disabled"}><button class="icon-button" type="button" data-action="reveal-password" aria-label="Show password" aria-pressed="false">${icon("eye")}</button></span></label>
+      <p class="detail">Enter the network details to send to MOKUKU.</p>
+      <button class="button primary full" type="submit" ${state.connected ? "" : "disabled"}>Save Wi-Fi</button>
+      <div id="wifi-feedback" class="inline-status" role="status"></div>
+    </form>
+    <form id="remote-url-settings" class="card">
+      <div class="card-heading"><span class="icon-tile">${icon("link")}</span><div><h3>Remote URL</h3><p>Choose where updates come from.</p></div></div>
       <label class="field">Remote base URL<input name="remote-url" type="url" placeholder="https://updates.example.com/mokuku/" autocomplete="off" required ${state.connected ? "" : "disabled"}></label>
-      <p class="detail">Enter the values to send. Existing settings cannot be read from MOKUKU.</p>
-      <button class="button primary full" type="submit" ${state.connected ? "" : "disabled"}>Save connection settings</button>
-      <div id="settings-feedback" class="inline-status" role="status"></div>
+      <p class="detail">Existing settings cannot be read from MOKUKU.</p>
+      <button class="button primary full" type="submit" ${state.connected ? "" : "disabled"}>Save remote URL</button>
+      <div id="remote-url-feedback" class="inline-status" role="status"></div>
     </form>
     <section class="card"><div class="card-heading"><span class="icon-tile warm">${icon("software")}</span><div><h3>Firmware OTA</h3><p>${state.connected || state.hasConnected ? `${state.connected ? "" : "Last received · "}Left 2.0.0 · Right 2.0.0` : "Connect to query eye versions."}</p></div></div><p class="step-note">01 &nbsp; Right eye first &nbsp; → &nbsp; 02 &nbsp; Reconnect &nbsp; → &nbsp; 03 &nbsp; Left eye</p>
       <div class="button-row">${deviceButton("Update right eye", "confirm-update", "secondary", 'data-kind="Firmware OTA" data-eye="right"')}${deviceButton("Update left eye", "confirm-update", "secondary", 'data-kind="Firmware OTA" data-eye="left"')}</div></section>
@@ -365,10 +372,11 @@ document.addEventListener("click", (event) => {
 });
 
 document.addEventListener("submit", (event) => {
-  if (event.target.id !== "connection-settings") return;
+  if (!event.target.matches("#wifi-settings, #remote-url-settings")) return;
   event.preventDefault();
   if (!state.connected) return;
-  document.getElementById("settings-feedback").textContent = "Preview: entries accepted locally. No settings were sent or stored.";
+  const setting = event.target.id === "wifi-settings" ? "Wi-Fi" : "Remote URL";
+  event.target.querySelector('[role="status"]').textContent = `Preview: ${setting} entries accepted locally. No settings were sent or stored.`;
 });
 
 sheet.addEventListener("close", () => clearTimeout(scanTimer));

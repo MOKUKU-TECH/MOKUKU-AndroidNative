@@ -165,6 +165,7 @@ h1 em { font-style: normal; color: var(--mint); }
 .download-progress progress::-webkit-progress-value { background: var(--mint); border-radius: 3px; }
 .download-status { display: flex; align-items: center; justify-content: space-between; font-size: 10px; color: var(--secondary); }
 .inline-status { font-size: 11px; line-height: 1.6; color: var(--mint); margin-top: 14px; min-height: 18px; }
+.inline-status:empty { margin-top: 0; min-height: 0; }
 #toast { position: absolute; left: 22px; right: 22px; bottom: 105px; padding: 15px 18px; background: #2a3b46; border: 1px solid #426052; color: var(--text); border-radius: 14px; box-shadow: 0 8px 24px #0004; font-size: 12px; line-height: 1.6; opacity: 0; pointer-events: none; transition: opacity .18s; }
 #toast.visible { opacity: 1; }
 #sheet { position: fixed; inset: auto auto 19px; width: calc(100% - 16px); max-height: 82%; padding: 24px; margin: 0; border: 1px solid var(--border); border-radius: 25px 25px 18px 18px; background: var(--surface); color: var(--text); box-shadow: 0 -10px 50px #0006; }
