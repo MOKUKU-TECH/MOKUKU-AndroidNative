@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">MOKUKU Debug</string>
+    <string name="app_description">Android companion for MOKUKU</string>
+</resources>
