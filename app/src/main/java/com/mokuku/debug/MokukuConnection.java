@@ -462,10 +462,10 @@ final class MokukuConnection {
                 operationCancellable = false;
                 publish();
                 setting(networkPacket, 7, (reply, error) -> {
-                    if (error != null) { endOperation("Wi-Fi name was not saved: " + error); return; }
+                    if (error != null) { endOperation("Could not confirm the Wi-Fi name: " + error); return; }
                     setting(passwordPacket, 8, (value, failure) -> endOperation(failure == null
                             ? "Wi-Fi name and password saved to MOKUKU."
-                            : "Wi-Fi name saved, but password failed: " + failure));
+                            : "Wi-Fi name saved, but password could not be confirmed: " + failure));
                 });
             } catch (IllegalArgumentException exception) { report(exception.getMessage()); }
         });
