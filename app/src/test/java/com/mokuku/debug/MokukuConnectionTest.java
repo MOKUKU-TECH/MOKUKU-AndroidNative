@@ -306,6 +306,119 @@ public class MokukuConnectionTest {
         } finally { connection.close(); }
     }
 
+    @Test public void mokukuIIListsPagesWithoutAccessCodeAndClearsInOneRequest() throws Exception {
+        MokukuConnection connection = connectedSession();
+        try {
+            List<byte[]> writes = new ArrayList<>();
+            boolean[] cleared = {false};
+            CountDownLatch listed = new CountDownLatch(1);
+            CountDownLatch done = new CountDownLatch(2);
+            BluetoothGatt gatt = ReflectionHelpers.getField(connection, "gatt");
+            BluetoothGattCallback callback = ReflectionHelpers.getField(connection, "gattCallback");
+            onWorker(connection, () -> {
+                ReflectionHelpers.setField(connection, "mokukuII", true);
+                BluetoothGattCharacteristic messages = ReflectionHelpers.getField(connection, "messages");
+                shadowOf(gatt).setGattCallback(new BluetoothGattCallback() {
+                    @Override @SuppressWarnings("deprecation")
+                    public void onCharacteristicWrite(BluetoothGatt value, BluetoothGattCharacteristic characteristic, int status) {
+                        byte[] packet = characteristic.getValue().clone();
+                        writes.add(packet);
+                        callback.onCharacteristicWrite(value, characteristic, status);
+                        String reply = null;
+                        if (packet[0] == 2 && packet[1] == 13) { cleared[0] = true; reply = ""; }
+                        else if (packet[0] == 3 && packet[1] == 10) {
+                            int first = packet[2] & 0xff;
+                            reply = cleared[0] || first == 3 ? "" : first == 0 ? "mobili_1.record,mobili_2.record" : "mobili_3.record";
+                            if (reply.isEmpty()) { listed.countDown(); done.countDown(); }
+                        }
+                        if (reply == null) return;
+                        byte[] text = reply.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                        messages.setValue(ByteBuffer.allocate(text.length + 3).put(packet[0]).put(packet[1]).put((byte) 0).put(text).array());
+                        callback.onCharacteristicChanged(value, messages);
+                    }
+                });
+            });
+            connection.refreshRecordings();
+            assertTrue(listed.await(5, TimeUnit.SECONDS));
+            onWorker(connection, () -> {});
+            assertEquals(java.util.Arrays.asList("mobili_3.record", "mobili_2.record", "mobili_1.record"), connection.snapshot().recordings);
+            connection.deleteRecording(null, true);
+            assertTrue(done.await(5, TimeUnit.SECONDS));
+            onWorker(connection, () -> {});
+            assertTrue(connection.snapshot().recordings.isEmpty());
+            assertTrue(connection.snapshot().message, connection.snapshot().message.contains("cleared"));
+            for (byte[] packet : writes) assertNotEquals(44, packet[0]);
+            assertArrayEquals(new byte[] {2, 13}, writes.get(3));
+        } finally { connection.close(); }
+    }
+
+    @Test public void mokukuIIFirmwareUpdateSendsAcknowledgedSectors() throws Exception {
+        MokukuConnection connection = connectedSession();
+        try {
+            byte[] image = pattern(250);
+            android.net.Uri uri = android.net.Uri.parse("content://test/firmware.bin");
+            shadowOf(RuntimeEnvironment.getApplication().getContentResolver()).registerInputStream(uri, new java.io.ByteArrayInputStream(image));
+            java.io.ByteArrayOutputStream written = new java.io.ByteArrayOutputStream();
+            java.io.ByteArrayOutputStream sector = new java.io.ByteArrayOutputStream();
+            CountDownLatch finished = new CountDownLatch(1);
+            BluetoothGatt gatt = ReflectionHelpers.getField(connection, "gatt");
+            BluetoothGattCallback callback = ReflectionHelpers.getField(connection, "gattCallback");
+            BluetoothGattCharacteristic command = new BluetoothGattCharacteristic(MokukuProtocol.FILE_COMMAND,
+                    BluetoothGattCharacteristic.PROPERTY_WRITE | BluetoothGattCharacteristic.PROPERTY_NOTIFY, 0);
+            BluetoothGattCharacteristic data = new BluetoothGattCharacteristic(MokukuProtocol.FILE_DATA,
+                    BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE | BluetoothGattCharacteristic.PROPERTY_NOTIFY, 0);
+            BluetoothGattService service = new BluetoothGattService(MokukuProtocol.SERVICE, BluetoothGattService.SERVICE_TYPE_PRIMARY);
+            service.addCharacteristic(command);
+            service.addCharacteristic(data);
+            onWorker(connection, () -> {
+                ReflectionHelpers.setField(connection, "mokukuII", true);
+                ReflectionHelpers.setField(connection, "fileCommand", command);
+                ReflectionHelpers.setField(connection, "fileData", data);
+                ReflectionHelpers.setField(connection, "mtu", 517);
+                shadowOf(gatt).setGattCallback(new BluetoothGattCallback() {
+                    @Override @SuppressWarnings("deprecation")
+                    public void onCharacteristicWrite(BluetoothGatt value, BluetoothGattCharacteristic characteristic, int status) {
+                        byte[] packet = characteristic.getValue().clone();
+                        callback.onCharacteristicWrite(value, characteristic, status);
+                        if (characteristic == command) {
+                            byte[] body = MokukuProtocol.withoutCrc(packet, packet.length);
+                            assertEquals(MokukuProtocol.COMMAND_START_FIRMWARE_UPDATE, body[0] & 0xff);
+                            byte[] reply = ByteBuffer.allocate(14).order(ByteOrder.LITTLE_ENDIAN).putShort((short) 3)
+                                    .putShort((short) 200).putShort((short) 0).putInt(100).putShort((short) 43).array();
+                            command.setValue(withCrc(reply));
+                            callback.onCharacteristicChanged(value, command);
+                        } else if (characteristic == data) {
+                            sector.write(packet, 3, packet.length - 3);
+                            if ((packet[2] & 0xff) != MokukuProtocol.LAST_PACKET) return;
+                            byte[] body = MokukuProtocol.withoutCrc(sector.toByteArray(), sector.size());
+                            sector.reset();
+                            written.write(body, 0, body.length);
+                            int index = packet[0];
+                            data.setValue(MokukuProtocol.acknowledgement(index, MokukuProtocol.SECTOR_OK, index + 1));
+                            callback.onCharacteristicChanged(value, data);
+                            if (written.size() == image.length) finished.countDown();
+                        }
+                    }
+                });
+            });
+            connection.updateFirmware(uri);
+            assertTrue(connection.snapshot().message, finished.await(5, TimeUnit.SECONDS));
+            onWorker(connection, () -> {});
+            onWorker(connection, () -> {});
+            assertArrayEquals(image, written.toByteArray());
+            assertFalse(connection.snapshot().connected);
+            assertTrue(connection.snapshot().message, connection.snapshot().message.contains("Firmware sent"));
+        } finally { connection.close(); }
+    }
+
+    private static byte[] withCrc(byte[] body) {
+        byte[] frame = java.util.Arrays.copyOf(body, body.length + 2);
+        int crc = MokukuProtocol.crc16(body, 0, body.length, 0);
+        frame[body.length] = (byte) crc;
+        frame[body.length + 1] = (byte) (crc >> 8);
+        return frame;
+    }
+
     private static byte[] pattern(int length) {
         byte[] bytes = new byte[length];
         for (int i = 0; i < length; i++) bytes[i] = (byte) (i * 7);

@@ -32,6 +32,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -46,8 +47,15 @@ final class MokukuConnection {
     private static final int DOWNLOAD_RETRY_LIMIT = 3;
     private static final long SECTOR_TIMEOUT_MILLISECONDS = 3000;
     private static final long START_RETRY_MILLISECONDS = 300;
+    // MOKUKU II drops a host that writes nothing for 30 s.
+    private static final long KEEP_ALIVE_MILLISECONDS = 10000;
+    // A firmware sector is up to 256 packets.
+    private static final int REQUEST_QUEUE_LIMIT = 300;
+    private static final int FIRMWARE_IMAGE_MAXIMUM_BYTES = 16 << 20;
+    static final String FIRMWARE_UPDATE = "Updating firmware";
     interface Listener { void changed(Snapshot snapshot); }
     private interface Reply { void complete(byte[] value, String error); }
+    private interface Names { void complete(List<String> names, String error); }
 
     static final class Device {
         final String name;
@@ -67,6 +75,7 @@ final class MokukuConnection {
         final boolean busy;
         final boolean cancellable;
         final boolean hasRecordingAccessCode;
+        final boolean mokukuII;
         final String name;
         final String address;
         final String message;
@@ -88,6 +97,7 @@ final class MokukuConnection {
             busy = connection.operation != null;
             cancellable = connection.operationCancellable;
             hasRecordingAccessCode = !connection.recordingAccessCode.isEmpty();
+            mokukuII = connection.mokukuII;
             name = connection.name;
             address = connection.address;
             message = connection.message;
@@ -144,6 +154,8 @@ final class MokukuConnection {
     private BluetoothGattCharacteristic fileData;
     private final ArrayDeque<BluetoothGattCharacteristic> subscriptions = new ArrayDeque<>();
     private boolean ready;
+    // Chosen from the advertised name: mokukuii… speaks the set/get protocol.
+    private boolean mokukuII;
     private int mtu = 23;
     private Request active;
     private String name = "MOKUKU";
@@ -166,10 +178,23 @@ final class MokukuConnection {
     private final ByteArrayOutputStream sectorBytes = new ByteArrayOutputStream();
     private int downloadRetries;
     private String downloadName;
+    private byte[] firmwareImage;
+    private int packetSize;
     private long downloadStartedAt;
     private final Runnable scanTimeout = this::stopScanOnWorker;
     private final Runnable sectorTimeout = this::retrySector;
     private final Runnable startDownloadAgain = () -> startDownload(operationId);
+    private long lastWriteAt;
+    // Re-arms itself for the time left since the last write, so writes need not touch the handler.
+    private final Runnable keepAlive = new Runnable() {
+        @Override public void run() {
+            if (!ready || !mokukuII) return;
+            long idle = android.os.SystemClock.elapsedRealtime() - lastWriteAt;
+            if (idle < KEEP_ALIVE_MILLISECONDS) { worker.postDelayed(this, KEEP_ALIVE_MILLISECONDS - idle); return; }
+            if (active == null && requests.isEmpty()) send(get(MokukuProtocol.PROPERTY_VERSION), (reply, error) -> {});
+            worker.postDelayed(this, KEEP_ALIVE_MILLISECONDS);
+        }
+    };
     private final Runnable connectionTimeout = () -> disconnectOnWorker("Connection timed out. Try again.");
     private final Runnable requestTimeout = () -> {
         if (active != null) Log.w(TAG, "Request timed out: replyId=" + active.replyId
@@ -191,6 +216,7 @@ final class MokukuConnection {
             android.content.SharedPreferences preferences = this.context.getSharedPreferences("device", Context.MODE_PRIVATE);
             address = preferences.getString("address", "");
             name = preferences.getString("name", "MOKUKU");
+            mokukuII = MokukuProtocol.isMokukuII(name);
             recordingAccessCode = recordingAccessPreferences.getString(address, "");
             deletePartialDownloads();
             publish();
@@ -248,7 +274,7 @@ final class MokukuConnection {
             worker.post(() -> {
                 if (scanner == null || result.getScanRecord() == null) return;
                 String deviceName = result.getScanRecord().getDeviceName();
-                if (!MokukuProtocol.isOriginalDevice(deviceName)) return;
+                if (!MokukuProtocol.isOriginalDevice(deviceName) && !MokukuProtocol.isMokukuII(deviceName)) return;
                 String deviceAddress;
                 try { deviceAddress = result.getDevice().getAddress(); }
                 catch (SecurityException exception) { stopScanOnWorker(); report("Bluetooth permission was revoked. Check app permissions and search again."); return; }
@@ -276,6 +302,7 @@ final class MokukuConnection {
             }
             address = device.address;
             name = device.name;
+            mokukuII = MokukuProtocol.isMokukuII(name);
             recordingAccessCode = recordingAccessPreferences.getString(address, "");
             context.getSharedPreferences("device", Context.MODE_PRIVATE).edit().putString("address", address).putString("name", name).apply();
             mtu = 23;
@@ -298,6 +325,7 @@ final class MokukuConnection {
         refreshingInformation = false;
         worker.removeCallbacks(connectionTimeout);
         worker.removeCallbacks(requestTimeout);
+        worker.removeCallbacks(keepAlive);
         BluetoothGatt previous = gatt;
         gatt = null;
         data = null;
@@ -343,8 +371,9 @@ final class MokukuConnection {
                 messages = service == null ? null : service.getCharacteristic(MokukuProtocol.MESSAGE);
                 fileCommand = service == null ? null : service.getCharacteristic(MokukuProtocol.FILE_COMMAND);
                 fileData = service == null ? null : service.getCharacteristic(MokukuProtocol.FILE_DATA);
-                if (status != BluetoothGatt.GATT_SUCCESS || data == null || messages == null) {
-                    disconnectOnWorker("This device does not provide the original MOKUKU protocol."); return;
+                boolean complete = mokukuII ? messages != null && fileCommand != null && fileData != null : data != null && messages != null;
+                if (status != BluetoothGatt.GATT_SUCCESS || !complete) {
+                    disconnectOnWorker("This device does not provide the " + (mokukuII ? "MOKUKU II" : "original MOKUKU") + " protocol."); return;
                 }
                 try {
                     if (!connection.requestMtu(517)) subscribe();
@@ -366,6 +395,7 @@ final class MokukuConnection {
                 if (!subscriptions.isEmpty()) { subscribeNext(); return; }
                 worker.removeCallbacks(connectionTimeout);
                 ready = true;
+                if (mokukuII) worker.postDelayed(keepAlive, KEEP_ALIVE_MILLISECONDS);
                 report("Connected. Refreshing device information…");
                 refreshInformationOnWorker();
             });
@@ -390,7 +420,7 @@ final class MokukuConnection {
 
     private void subscribe() {
         subscriptions.clear();
-        subscriptions.add(data);
+        subscriptions.add(mokukuII ? messages : data);
         if (fileCommand != null && fileData != null) { subscriptions.add(fileCommand); subscriptions.add(fileData); }
         subscribeNext();
     }
@@ -419,10 +449,18 @@ final class MokukuConnection {
         UUID uuid = characteristic.getUuid();
         worker.post(() -> {
             if (connection != gatt || value.length == 0) return;
-            if (uuid.equals(MokukuProtocol.FILE_COMMAND)) { if (output != null) acceptDownloadStart(value); return; }
-            if (uuid.equals(MokukuProtocol.FILE_DATA)) { if (output != null && total > 0) acceptSectorPacket(value); return; }
-            if (!uuid.equals(MokukuProtocol.DATA)) return;
-            if (active == null || MokukuProtocol.unsigned(value[0]) != active.replyId) return;
+            if (uuid.equals(MokukuProtocol.FILE_COMMAND)) {
+                if (output != null) acceptDownloadStart(value);
+                else if (firmwareImage != null) acceptFirmwareUpdateStart(value);
+                return;
+            }
+            if (uuid.equals(MokukuProtocol.FILE_DATA)) {
+                if (output != null && total > 0) acceptSectorPacket(value);
+                else if (firmwareImage != null && total > 0) acceptFirmwareAcknowledgement(value);
+                return;
+            }
+            if (!uuid.equals(mokukuII ? MokukuProtocol.MESSAGE : MokukuProtocol.DATA)) return;
+            if (active == null || MokukuProtocol.replyKey(value, mokukuII) != active.replyId) return;
             active.reply = value;
             completeRequest();
         });
@@ -435,7 +473,7 @@ final class MokukuConnection {
     private void request(UUID characteristic, byte[] bytes, int replyId, boolean withoutResponse, Reply callback) {
         if (!ready) { callback.complete(null, "Connect to MOKUKU first."); return; }
         if (bytes.length > mtu - 3) { callback.complete(null, "Bluetooth packet size is too small for this setting. Reconnect and try again."); return; }
-        if (requests.size() >= 32) { callback.complete(null, "Wait for the current requests to finish."); return; }
+        if (requests.size() >= REQUEST_QUEUE_LIMIT) { callback.complete(null, "Wait for the current requests to finish."); return; }
         requests.add(new Request(characteristic, bytes, replyId, withoutResponse, callback));
         pump();
     }
@@ -458,9 +496,31 @@ final class MokukuConnection {
             }
             if (!started) { disconnectOnWorker("Bluetooth is busy or unavailable. Reconnect and try again."); return; }
             worker.postDelayed(requestTimeout, 8000);
+            lastWriteAt = android.os.SystemClock.elapsedRealtime();
         } catch (SecurityException | IllegalStateException exception) {
             disconnectOnWorker("Bluetooth access was lost. Check permissions and reconnect.");
         }
+    }
+
+    /** Sends a message whose reply reports success: `ID, 1` or MOKUKU II's result 0. */
+    private void send(byte[] packet, Reply callback) {
+        request(MokukuProtocol.MESSAGE, packet, MokukuProtocol.replyKey(packet, mokukuII), (reply, error) -> {
+            if (error == null) {
+                try {
+                    if (mokukuII) MokukuProtocol.propertyValue(reply);
+                    else MokukuProtocol.textReply(reply, MokukuProtocol.unsigned(reply[0]));
+                } catch (IllegalArgumentException exception) { error = exception.getMessage(); }
+            }
+            callback.complete(reply, error);
+        });
+    }
+
+    private static byte[] set(int property, byte[] value) {
+        return MokukuProtocol.property(MokukuProtocol.TYPE_SET, property, value);
+    }
+
+    private static byte[] get(int property) {
+        return MokukuProtocol.property(MokukuProtocol.TYPE_GET, property, new byte[0]);
     }
 
     private BluetoothGattCharacteristic characteristic(UUID uuid) {
@@ -481,29 +541,49 @@ final class MokukuConnection {
 
     void refreshInformation() { worker.post(() -> { if (canStart()) refreshInformationOnWorker(); }); }
 
+    // Information is keyed by the original message IDs; MOKUKU II properties map onto them, and its
+    // own properties (OBD 6, language 9, firmware slots 16) use their numbers.
+    private static final int[][] MOKUKU_II_INFORMATION = {
+            {MokukuProtocol.PROPERTY_VERSION, 3}, {MokukuProtocol.PROPERTY_MAC_ADDRESS, 4},
+            {MokukuProtocol.PROPERTY_WAKE_WORD_MODEL, 57}, {MokukuProtocol.PROPERTY_LANGUAGE, MokukuProtocol.PROPERTY_LANGUAGE},
+            {MokukuProtocol.PROPERTY_OBD_ENABLED, MokukuProtocol.PROPERTY_OBD_ENABLED},
+            {MokukuProtocol.PROPERTY_FIRMWARE_SLOTS, MokukuProtocol.PROPERTY_FIRMWARE_SLOTS}, {MokukuProtocol.PROPERTY_SD_CARD, 61}};
+
     private void refreshInformationOnWorker() {
         if (refreshingInformation) return;
         refreshingInformation = true;
-        for (int id : new int[] {3, 4, 5, 57, 61}) {
-            request(MokukuProtocol.MESSAGE, new byte[] {(byte) id}, id, (reply, error) -> {
-                if (!ready) return;
-                if (error == null) {
-                    try {
-                        String value = id == 57 ? MokukuProtocol.voiceModel(reply) : MokukuProtocol.textReply(reply, id);
-                        if (id == 61) MokukuProtocol.storage(reply);
-                        if (value.isEmpty()) throw new IllegalArgumentException("No information returned.");
-                        information.put(id, value);
-                        errors.remove(id);
-                    } catch (IllegalArgumentException exception) { error = exception.getMessage(); }
-                }
-                if (error != null) errors.put(id, error);
-                if (id == 61) {
-                    refreshingInformation = false;
-                    if (ready) message = errors.isEmpty() ? "Device information refreshed." : "Device information refreshed; some queries are unavailable.";
-                }
-                publish();
-            });
+        if (mokukuII) {
+            for (int[] query : MOKUKU_II_INFORMATION) queryInformation(query[0], query[1], query == MOKUKU_II_INFORMATION[MOKUKU_II_INFORMATION.length - 1]);
+        } else {
+            int[] keys = {3, 4, 5, 57, 61};
+            for (int key : keys) queryInformation(key, key, key == keys[keys.length - 1]);
         }
+    }
+
+    private void queryInformation(int property, int key, boolean last) {
+        byte[] query = mokukuII ? get(property) : new byte[] {(byte) key};
+        request(MokukuProtocol.MESSAGE, query, MokukuProtocol.replyKey(query, mokukuII), (reply, error) -> {
+            if (!ready) return;
+            if (error == null) {
+                try {
+                    String value;
+                    if (mokukuII) value = MokukuProtocol.describeProperty(property, MokukuProtocol.propertyValue(reply));
+                    else {
+                        value = key == 57 ? MokukuProtocol.voiceModel(reply) : MokukuProtocol.textReply(reply, key);
+                        if (key == 61) MokukuProtocol.storage(reply);
+                    }
+                    if (value.isEmpty()) throw new IllegalArgumentException("No information returned.");
+                    information.put(key, value);
+                    errors.remove(key);
+                } catch (IllegalArgumentException exception) { error = exception.getMessage(); }
+            }
+            if (error != null) errors.put(key, error);
+            if (last) {
+                refreshingInformation = false;
+                if (ready) message = errors.isEmpty() ? "Device information refreshed." : "Device information refreshed; some queries are unavailable.";
+            }
+            publish();
+        });
     }
 
     private boolean canStart() {
@@ -513,15 +593,23 @@ final class MokukuConnection {
     }
 
     void command(int command, String label) {
+        perform(MokukuProtocol.command(command), label, command >= 66 && command <= 73, null);
+    }
+
+    /** Sets a MOKUKU II property; restarting when acceptance reboots the device. */
+    void setProperty(int property, byte[] value, String label, boolean restarting) {
+        // Read OBD back so Debug shows the state MOKUKU II reports.
+        Runnable accepted = property == MokukuProtocol.PROPERTY_OBD_ENABLED
+                ? () -> queryInformation(property, property, false) : null;
+        perform(set(property, value), label, restarting, accepted);
+    }
+
+    private void perform(byte[] packet, String label, boolean restarting, Runnable accepted) {
         worker.post(() -> {
             if (!canStart()) return;
-            boolean restarting = command >= 66 && command <= 73;
             if (restarting) { operation = label; operationCancellable = false; publish(); }
-            request(MokukuProtocol.MESSAGE, MokukuProtocol.command(command), 1, (reply, error) -> {
-                if (error == null) {
-                    try { MokukuProtocol.textReply(reply, 1); }
-                    catch (IllegalArgumentException exception) { error = exception.getMessage(); }
-                }
+            send(packet, (reply, error) -> {
+                if (error == null && accepted != null) accepted.run();
                 if (restarting && error == null) {
                     disconnectOnWorker(label + " requested. Reconnect after MOKUKU finishes to check versions.");
                 } else if (restarting) endOperation(error);
@@ -534,14 +622,14 @@ final class MokukuConnection {
         worker.post(() -> {
             if (!canStart()) return;
             try {
-                byte[] networkPacket = MokukuProtocol.stringMessage(7, network, 32);
-                byte[] passwordPacket = MokukuProtocol.stringMessage(8, password, 64);
+                byte[] networkPacket = stringSetting(7, MokukuProtocol.PROPERTY_WIFI_NAME, network, 32);
+                byte[] passwordPacket = stringSetting(8, MokukuProtocol.PROPERTY_WIFI_PASSWORD, password, 64);
                 operation = "Saving Wi-Fi";
                 operationCancellable = false;
                 publish();
-                setting(networkPacket, 7, (reply, error) -> {
+                send(networkPacket, (reply, error) -> {
                     if (error != null) { endOperation("Could not confirm the Wi-Fi name: " + error); return; }
-                    setting(passwordPacket, 8, (value, failure) -> endOperation(failure == null
+                    send(passwordPacket, (value, failure) -> endOperation(failure == null
                             ? "Wi-Fi name and password saved to MOKUKU."
                             : "Wi-Fi name saved, but password could not be confirmed: " + failure));
                 });
@@ -558,20 +646,15 @@ final class MokukuConnection {
                     throw new IllegalArgumentException("Enter an HTTP or HTTPS base URL without credentials, query, or fragment.");
                 }
                 String normalized = url.replaceAll("/+$", "");
-                setting(MokukuProtocol.stringMessage(9, normalized, 255), 9,
+                send(stringSetting(9, MokukuProtocol.PROPERTY_REMOTE_ADDRESS, normalized, 255),
                         (reply, error) -> report(error == null ? "Remote URL saved to MOKUKU." : error));
             } catch (IllegalArgumentException exception) { report(exception.getMessage()); }
         });
     }
 
-    private void setting(byte[] packet, int id, Reply callback) {
-        request(MokukuProtocol.MESSAGE, packet, id, (reply, error) -> {
-            if (error == null) {
-                try { MokukuProtocol.textReply(reply, id); }
-                catch (IllegalArgumentException exception) { error = exception.getMessage(); }
-            }
-            callback.complete(reply, error);
-        });
+    private byte[] stringSetting(int id, int property, String value, int maximumBytes) {
+        return mokukuII ? set(property, MokukuProtocol.utf8(value, MokukuProtocol.MOKUKU_II_STRING_MAXIMUM_BYTES))
+                : MokukuProtocol.stringMessage(id, value, maximumBytes);
     }
 
     void setDateTime(int year, int month, int day, int hour, int minute) {
@@ -606,7 +689,9 @@ final class MokukuConnection {
         });
     }
 
+    // MOKUKU II needs no recording access code.
     private void authorize(Reply callback) {
+        if (mokukuII) { callback.complete(null, null); return; }
         if (recordingAccessCode.isEmpty()) {
             callback.complete(null, "Enter an access code in Data Collection to access recordings."); return;
         }
@@ -615,8 +700,24 @@ final class MokukuConnection {
         } catch (IllegalArgumentException exception) { callback.complete(null, "Enter a valid recording access code."); }
     }
 
-    private void list(Reply callback) {
-        request(MokukuProtocol.MESSAGE, MokukuProtocol.stringMessage(60, MokukuProtocol.RECORD_DIRECTORY, 255), 60, callback);
+    private void list(Names callback) {
+        String directory = MokukuProtocol.recordDirectory(mokukuII);
+        if (mokukuII) { listFrom(new ArrayList<>(), directory, callback); return; }
+        send(MokukuProtocol.stringMessage(60, directory, 255), (reply, error) -> {
+            if (error != null) callback.complete(null, error);
+            else callback.complete(MokukuProtocol.recordings(Arrays.asList(MokukuProtocol.textReply(reply, 60).split(","))), null);
+        });
+    }
+
+    // MOKUKU II returns one notification of names per request; an empty page ends the list.
+    private void listFrom(List<String> names, String directory, Names callback) {
+        send(MokukuProtocol.listDirectory(names.size(), directory), (reply, error) -> {
+            if (error != null) { callback.complete(null, error); return; }
+            List<String> page = MokukuProtocol.directoryNames(MokukuProtocol.propertyValue(reply));
+            if (page.isEmpty()) { callback.complete(MokukuProtocol.recordings(names), null); return; }
+            names.addAll(page);
+            listFrom(names, directory, callback);
+        });
     }
 
     void refreshRecordings() {
@@ -629,13 +730,10 @@ final class MokukuConnection {
             authorize((reply, error) -> {
                 if (id != operationId) return;
                 if (error != null) { endOperation(error); return; }
-                list((value, failure) -> {
+                list((names, failure) -> {
                     if (id != operationId) return;
-                    if (failure == null) {
-                        try { recordings = MokukuProtocol.recordings(value); }
-                        catch (IllegalArgumentException exception) { failure = exception.getMessage(); }
-                    }
-                    endOperation(failure == null ? "Recordings refreshed. The firmware may return a partial list." : failure);
+                    if (failure == null) recordings = names;
+                    endOperation(failure == null ? "Recordings refreshed." + (mokukuII ? "" : " The firmware may return a partial list.") : failure);
                 });
             });
         });
@@ -662,13 +760,10 @@ final class MokukuConnection {
             authorize((reply, error) -> {
                 if (id != operationId) return;
                 if (error != null) { endOperation(error); return; }
+                if (mokukuII) { clearMokukuII(id); return; }
                 // Stop recording before touching files; command acceptance is not state readback.
-                request(MokukuProtocol.MESSAGE, MokukuProtocol.command(2), 1, (value, failure) -> {
+                send(MokukuProtocol.command(2), (value, failure) -> {
                     if (id != operationId) return;
-                    if (failure == null) {
-                        try { MokukuProtocol.textReply(value, 1); }
-                        catch (IllegalArgumentException exception) { failure = exception.getMessage(); }
-                    }
                     if (failure != null) endOperation(failure);
                     else if (all) nextDelete(id, null);
                     else deleteThenList(id, name, false);
@@ -677,12 +772,25 @@ final class MokukuConnection {
         });
     }
 
+    // MOKUKU II deletes every recording in one request and refuses while recording.
+    private void clearMokukuII(int id) {
+        send(set(MokukuProtocol.PROPERTY_DELETE_RECORDINGS, new byte[0]), (reply, error) -> {
+            if (id != operationId) return;
+            if (error != null) { endOperation("Clearing failed. Stop any recording and try again. " + error); return; }
+            list((names, failure) -> {
+                if (id != operationId) return;
+                if (failure == null) recordings = names;
+                endOperation(failure != null ? failure : names.isEmpty()
+                        ? "Device recordings cleared. Phone copies are kept." : "Some recordings are still returned. Refresh and retry.");
+            });
+        });
+    }
+
     private void nextDelete(int id, String previousName) {
-        list((reply, error) -> {
+        list((names, error) -> {
             if (id != operationId) return;
             if (error != null) { endOperation("Clearing stopped: " + error); return; }
-            try { recordings = MokukuProtocol.recordings(reply); }
-            catch (IllegalArgumentException exception) { endOperation(exception.getMessage()); return; }
+            recordings = names;
             if (previousName != null && recordings.contains(previousName)) {
                 endOperation("Clearing stopped: " + previousName + " is still returned. Refresh and retry."); return;
             }
@@ -694,17 +802,15 @@ final class MokukuConnection {
 
     private void deleteThenList(int id, String name, boolean all) {
         try {
-            request(MokukuProtocol.MESSAGE, MokukuProtocol.stringMessage(62, MokukuProtocol.recordPath(name), 255), -1, (reply, error) -> {
+            request(MokukuProtocol.MESSAGE, MokukuProtocol.stringMessage(62, MokukuProtocol.recordPath(name, false), 255), -1, (reply, error) -> {
                 if (id != operationId) return;
                 if (error != null) { endOperation(error); return; }
                 if (all) { nextDelete(id, name); return; }
-                list((value, failure) -> {
+                list((names, failure) -> {
                     if (id != operationId) return;
                     if (failure == null) {
-                        try {
-                            recordings = MokukuProtocol.recordings(value);
-                            if (recordings.contains(name)) failure = "The recording is still returned. It may not have been deleted.";
-                        } catch (IllegalArgumentException exception) { failure = exception.getMessage(); }
+                        recordings = names;
+                        if (recordings.contains(name)) failure = "The recording is still returned. It may not have been deleted.";
                     }
                     endOperation(failure == null ? "Recording no longer returned. Phone copies are kept." : failure);
                 });
@@ -741,7 +847,7 @@ final class MokukuConnection {
     private void startDownload(int id) {
         if (id != operationId) return;
         try {
-            request(MokukuProtocol.FILE_COMMAND, MokukuProtocol.startDownload(MokukuProtocol.recordPath(downloadName)), -1, (reply, error) -> {
+            request(MokukuProtocol.FILE_COMMAND, MokukuProtocol.startDownload(MokukuProtocol.recordPath(downloadName, mokukuII)), -1, (reply, error) -> {
                 if (id == operationId && error != null) endOperation(error);
             });
             worker.removeCallbacks(sectorTimeout);
@@ -769,7 +875,8 @@ final class MokukuConnection {
         } catch (IllegalStateException refused) {
             // MOKUKU applies the access code on another task, so the first start can race it.
             worker.removeCallbacks(sectorTimeout);
-            if (++downloadRetries > DOWNLOAD_RETRY_LIMIT) endOperation(refused.getMessage());
+            if (mokukuII) endOperation("MOKUKU II refused the recording. Refresh recordings and try again.");
+            else if (++downloadRetries > DOWNLOAD_RETRY_LIMIT) endOperation(refused.getMessage());
             else worker.postDelayed(startDownloadAgain, START_RETRY_MILLISECONDS);
         } catch (IOException | IllegalArgumentException exception) { endOperation(exception.getMessage()); }
     }
@@ -818,6 +925,7 @@ final class MokukuConnection {
     // Asks MOKUKU to resend the current sector after a CRC failure, a gap or a stall.
     private void retrySector() {
         worker.removeCallbacks(sectorTimeout);
+        if (firmwareImage != null) { resendFirmwareSector(); return; }
         if (output == null) return;
         if (total == 0) { endOperation("MOKUKU did not start the download. Reconnect and try again."); return; }
         if (++downloadRetries > DOWNLOAD_RETRY_LIMIT) { endOperation("MOKUKU stopped sending recording data. Download again."); return; }
@@ -830,9 +938,110 @@ final class MokukuConnection {
     // The acknowledgement names the sector MOKUKU sends next.
     private void acknowledge(int acknowledged, int status) {
         int id = operationId;
-        boolean withoutResponse = (fileData.getProperties() & BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE) != 0;
-        request(MokukuProtocol.FILE_DATA, MokukuProtocol.acknowledgement(acknowledged, status, sector), -1, withoutResponse,
+        writeFileData(MokukuProtocol.acknowledgement(acknowledged, status, sector),
                 (reply, error) -> { if (id == operationId && error != null) endOperation(error); });
+    }
+
+    private void writeFileData(byte[] packet, Reply callback) {
+        boolean withoutResponse = (fileData.getProperties() & BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE) != 0;
+        request(MokukuProtocol.FILE_DATA, packet, -1, withoutResponse, callback);
+    }
+
+    void updateFirmware(android.net.Uri image) {
+        worker.post(() -> {
+            if (!canStart()) return;
+            if (!mokukuII) { report("Firmware images are sent only to MOKUKU II."); return; }
+            byte[] bytes;
+            try (java.io.InputStream input = context.getContentResolver().openInputStream(image)) {
+                if (input == null) throw new IOException("The firmware image could not be opened.");
+                ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+                byte[] chunk = new byte[65536];
+                for (int length; (length = input.read(chunk)) > 0; ) {
+                    buffer.write(chunk, 0, length);
+                    if (buffer.size() > FIRMWARE_IMAGE_MAXIMUM_BYTES) throw new IOException("The file is too large for a firmware image.");
+                }
+                bytes = buffer.toByteArray();
+            } catch (IOException | SecurityException exception) { report("Could not read the firmware image: " + exception.getMessage()); return; }
+            if (bytes.length == 0) { report("The firmware image is empty."); return; }
+            operation = FIRMWARE_UPDATE;
+            operationCancellable = true;
+            received = 0;
+            total = 0;
+            firmwareImage = bytes;
+            int id = ++operationId;
+            setDownloadPriority(true);
+            publish();
+            request(MokukuProtocol.FILE_COMMAND, MokukuProtocol.startFirmwareUpdate(bytes.length), -1, (reply, error) -> {
+                if (id == operationId && error != null) endOperation(error);
+            });
+            worker.postDelayed(sectorTimeout, SECTOR_TIMEOUT_MILLISECONDS);
+        });
+    }
+
+    private void acceptFirmwareUpdateStart(byte[] frame) {
+        if (total > 0) return;
+        try {
+            int[] started = MokukuProtocol.firmwareUpdateStarted(frame);
+            if (started == null) return;
+            sectorSize = started[0];
+            packetSize = Math.min(started[1], mtu - 3);
+            total = firmwareImage.length;
+            sector = 0;
+            downloadRetries = 0;
+            downloadStartedAt = android.os.SystemClock.elapsedRealtime();
+            Log.i(TAG, "Firmware update transport: MTU=" + mtu + ", sector=" + sectorSize + ", packet=" + packetSize);
+            publish();
+            sendFirmwareSector();
+        } catch (IllegalArgumentException exception) { endOperation(exception.getMessage()); }
+    }
+
+    private void sendFirmwareSector() {
+        worker.removeCallbacks(sectorTimeout);
+        int id = operationId;
+        int offset = (int) Math.min((long) sector * sectorSize, total);
+        int length = (int) Math.min(sectorSize, total - offset);
+        List<byte[]> packets = MokukuProtocol.sectorPackets(sector, firmwareImage, offset, length, packetSize);
+        for (int i = 0; i < packets.size(); i++) {
+            boolean last = i == packets.size() - 1;
+            writeFileData(packets.get(i), (reply, error) -> {
+                if (id != operationId) return;
+                if (error != null) endOperation(error);
+                // Wait for the acknowledgement only once the whole sector is written.
+                else if (last) worker.postDelayed(sectorTimeout, SECTOR_TIMEOUT_MILLISECONDS);
+            });
+        }
+    }
+
+    private void acceptFirmwareAcknowledgement(byte[] frame) {
+        int[] acknowledgement = MokukuProtocol.sectorAcknowledgement(frame);
+        if (acknowledgement == null || acknowledgement[0] != sector) return;
+        worker.removeCallbacks(sectorTimeout);
+        int status = acknowledgement[1];
+        if (status == MokukuProtocol.SECTOR_WRITE_ERROR) {
+            endOperation("MOKUKU II could not write the firmware image. It restarts into its current firmware."); return;
+        }
+        if (status == MokukuProtocol.SECTOR_OK) {
+            downloadRetries = 0;
+            received = Math.min(total, (long) (sector + 1) * sectorSize);
+            if (received >= total) {
+                // MOKUKU II checks the image, then restarts into it.
+                firmwareImage = null;
+                disconnectOnWorker("Firmware sent. MOKUKU II restarts into it; reconnect to check the version.");
+                return;
+            }
+            publish();
+        } else if (++downloadRetries > DOWNLOAD_RETRY_LIMIT) {
+            endOperation("MOKUKU II did not accept the firmware image. Try again."); return;
+        }
+        sector = acknowledgement[2];
+        sendFirmwareSector();
+    }
+
+    private void resendFirmwareSector() {
+        if (total == 0) { endOperation("MOKUKU II did not start the firmware update. Reconnect and try again."); return; }
+        if (++downloadRetries > DOWNLOAD_RETRY_LIMIT) { endOperation("MOKUKU II stopped acknowledging the firmware image. Try again."); return; }
+        Log.w(TAG, "Resending firmware sector " + sector + " (attempt " + downloadRetries + ")");
+        sendFirmwareSector();
     }
 
     void cancelOperation() {
@@ -862,8 +1071,11 @@ final class MokukuConnection {
         worker.removeCallbacks(startDownloadAgain);
         downloadRetries = 0;
         setDownloadPriority(false);
+        if ((output != null || firmwareImage != null) && ready) {
+            request(MokukuProtocol.FILE_COMMAND, MokukuProtocol.stopTransfer(), -1, (reply, error) -> {});
+        }
+        firmwareImage = null;
         if (output != null) {
-            if (ready) request(MokukuProtocol.FILE_COMMAND, MokukuProtocol.stopTransfer(), -1, (reply, error) -> {});
             try { output.close(); } catch (IOException ignored) {}
             output = null;
         }

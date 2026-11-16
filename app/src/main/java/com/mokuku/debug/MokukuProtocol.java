@@ -19,7 +19,6 @@ final class MokukuProtocol {
     static final UUID FILE_COMMAND = UUID.fromString("18bf25fe-c5c8-40fe-ab13-9aa144d65b69");
     static final UUID FILE_DATA = UUID.fromString("737cbd9b-848b-4fad-87b8-5c3b9f75768d");
     static final UUID NOTIFICATIONS = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
-    static final String RECORD_DIRECTORY = "/sd/record";
     // Start time YYYYMMDD_HHMMSS, recording_N before the time is known, and older mobili_N.record.
     private static final Pattern RECORDING_NAME = Pattern.compile(
             "[0-9]{8}_[0-9]{6}(_[0-9]{1,9})?\\.rec|recording_[0-9]{1,9}\\.rec|mobili_[0-9]{1,9}\\.record");
@@ -30,12 +29,31 @@ final class MokukuProtocol {
         return name != null && name.startsWith("mokuku_");
     }
 
-    static byte[] stringMessage(int id, String value, int maximumBytes) {
+    static boolean isMokukuII(String name) {
+        return name != null && name.startsWith("mokukuii");
+    }
+
+    static String recordDirectory(boolean mokukuII) {
+        return mokukuII ? "/sdcard/record" : "/sd/record";
+    }
+
+    static byte[] utf8(String value, int maximumBytes) {
         byte[] text = value.getBytes(StandardCharsets.UTF_8);
         if (text.length == 0 || text.length > maximumBytes || text.length > 255 || value.indexOf('\0') >= 0) {
             throw new IllegalArgumentException("Enter between 1 and " + maximumBytes + " UTF-8 bytes.");
         }
+        return text;
+    }
+
+    static byte[] stringMessage(int id, String value, int maximumBytes) {
+        byte[] text = utf8(value, maximumBytes);
         return ByteBuffer.allocate(text.length + 2).put((byte) id).put((byte) text.length).put(text).array();
+    }
+
+    /** Matches a request to its reply: the message ID, or MOKUKU II's message type and property. */
+    static int replyKey(byte[] packet, boolean mokukuII) {
+        if (!mokukuII) return unsigned(packet[0]);
+        return packet.length < 2 ? -2 : unsigned(packet[0]) << 8 | unsigned(packet[1]);
     }
 
     static byte[] command(int command) {
@@ -73,19 +91,19 @@ final class MokukuProtocol {
         }
     }
 
-    static String recordPath(String name) {
+    static String recordPath(String name, boolean mokukuII) {
         if (!isRecordingName(name)) {
             throw new IllegalArgumentException("Invalid recording filename.");
         }
-        return RECORD_DIRECTORY + "/" + name;
+        return recordDirectory(mokukuII) + "/" + name;
     }
 
     static boolean isRecordingName(String name) { return RECORDING_NAME.matcher(name).matches(); }
 
-    static List<String> recordings(byte[] packet) {
-        String text = textReply(packet, 60);
+    /** Valid recording names from a directory listing, newest first. */
+    static List<String> recordings(List<String> listed) {
         List<String> names = new ArrayList<>();
-        for (String name : text.split(",")) {
+        for (String name : listed) {
             if (isRecordingName(name) && !names.contains(name)) names.add(name);
         }
         Collections.sort(names, (left, right) -> {
@@ -107,13 +125,90 @@ final class MokukuProtocol {
         return Long.parseLong(name.substring(name.indexOf('_') + 1, name.indexOf('.')));
     }
 
+    // MOKUKU II message types and properties.
+    static final int TYPE_SET = 2;
+    static final int TYPE_GET = 3;
+    static final int PROPERTY_VERSION = 1;
+    static final int PROPERTY_MAC_ADDRESS = 2;
+    static final int PROPERTY_WIFI_NAME = 3;
+    static final int PROPERTY_WIFI_PASSWORD = 4;
+    static final int PROPERTY_REMOTE_ADDRESS = 5;
+    static final int PROPERTY_OBD_ENABLED = 6;
+    static final int PROPERTY_SD_CARD = 7;
+    static final int PROPERTY_WAKE_WORD_MODEL = 8;
+    static final int PROPERTY_LANGUAGE = 9;
+    static final int PROPERTY_DIRECTORY = 10;
+    static final int PROPERTY_DELETE_RECORDINGS = 13;
+    static final int PROPERTY_PANEL_ACTION = 15;
+    static final int PROPERTY_FIRMWARE_SLOTS = 16;
+    static final int PROPERTY_ROLLBACK = 200;
+    static final int MOKUKU_II_STRING_MAXIMUM_BYTES = 64;
+
+    static byte[] property(int type, int property, byte[] value) {
+        return ByteBuffer.allocate(value.length + 2).put((byte) type).put((byte) property).put(value).array();
+    }
+
+    static byte[] listDirectory(int first, String path) {
+        byte[] text = path.getBytes(StandardCharsets.UTF_8);
+        return property(TYPE_GET, PROPERTY_DIRECTORY, ByteBuffer.allocate(text.length + 2)
+                .order(ByteOrder.LITTLE_ENDIAN).putShort((short) first).put(text).array());
+    }
+
+    /** The value of a MOKUKU II set/get reply; throws with the reason for a result other than OK. */
+    static byte[] propertyValue(byte[] reply) {
+        if (reply.length < 3) throw new IllegalArgumentException("Invalid MOKUKU II reply.");
+        switch (reply[2]) {
+            case 0: return Arrays.copyOfRange(reply, 3, reply.length);
+            case 1: throw new IllegalArgumentException("MOKUKU II's firmware does not support this request.");
+            case 3: throw new IllegalArgumentException("MOKUKU II rejected the value.");
+            case 4: throw new IllegalArgumentException("MOKUKU II can't do this now: no SD card, a recording in progress, or the action is unavailable.");
+            default: throw new IllegalArgumentException("MOKUKU II could not complete the request (" + reply[2] + ").");
+        }
+    }
+
+    /** A MOKUKU II get value as display text; SD card space is free/total MB, as the original reply. */
+    static String describeProperty(int property, byte[] value) {
+        switch (property) {
+            case PROPERTY_MAC_ADDRESS: {
+                if (value.length != 6) throw new IllegalArgumentException("Invalid MAC address.");
+                StringBuilder text = new StringBuilder();
+                for (byte part : value) text.append(text.length() == 0 ? "" : ":").append(String.format("%02X", unsigned(part)));
+                return text.toString();
+            }
+            case PROPERTY_SD_CARD: {
+                if (value.length != 8) throw new IllegalArgumentException("SD card information is unavailable.");
+                ByteBuffer sizes = ByteBuffer.wrap(value).order(ByteOrder.LITTLE_ENDIAN);
+                long total = sizes.getInt(0) & 0xffffffffL;
+                long free = sizes.getInt(4) & 0xffffffffL;
+                if (total == 0 || free > total) throw new IllegalArgumentException("SD card information is unavailable.");
+                return free + "/" + total;
+            }
+            case PROPERTY_OBD_ENABLED:
+                if (value.length != 1) throw new IllegalArgumentException("Invalid OBD state.");
+                return value[0] == 0 ? "Off" : "On";
+            case PROPERTY_LANGUAGE: {
+                String language = new String(value, StandardCharsets.UTF_8);
+                return "en".equals(language) ? "English" : "cn".equals(language) ? "Mandarin" : language;
+            }
+            default:
+                return new String(value, StandardCharsets.UTF_8).trim();
+        }
+    }
+
+    static List<String> directoryNames(byte[] value) {
+        if (value.length == 0) return Collections.emptyList();
+        return Arrays.asList(new String(value, StandardCharsets.UTF_8).split(","));
+    }
+
     static final int COMMAND_START_DOWNLOAD = 2;
     static final int COMMAND_REPLY = 3;
     static final int COMMAND_STOP = 4;
+    static final int COMMAND_START_FIRMWARE_UPDATE = 200;
     static final int COMMAND_ACCEPTED = 0;
     static final int COMMAND_INVALID = 1;
     static final int SECTOR_OK = 0;
     static final int SECTOR_CRC_ERROR = 1;
+    static final int SECTOR_WRITE_ERROR = 3;
     // Sequence number of a sector's last packet, which ends with the sector's CRC.
     static final int LAST_PACKET = 0xff;
     static final int PACKET_HEADER_SIZE = 3;
@@ -140,6 +235,11 @@ final class MokukuProtocol {
         return crc == crc16(frame, 0, length - 2, 0) ? Arrays.copyOf(frame, length - 2) : null;
     }
 
+    static byte[] startFirmwareUpdate(int size) {
+        return withCrc(ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN)
+                .putShort((short) COMMAND_START_FIRMWARE_UPDATE).putInt(size));
+    }
+
     static byte[] startDownload(String path) {
         byte[] text = path.getBytes(StandardCharsets.UTF_8);
         return withCrc(ByteBuffer.allocate(text.length + 8).order(ByteOrder.LITTLE_ENDIAN)
@@ -155,22 +255,64 @@ final class MokukuProtocol {
                 .putShort((short) sector).putShort((short) status).putShort((short) nextSector));
     }
 
+    /** The body of a reply to this command, or null for other frames. */
+    private static ByteBuffer commandReply(byte[] frame, int command) {
+        byte[] body = withoutCrc(frame, frame.length);
+        if (body == null || body.length < 6) return null;
+        ByteBuffer buffer = ByteBuffer.wrap(body).order(ByteOrder.LITTLE_ENDIAN);
+        if ((buffer.getShort(0) & 0xffff) != COMMAND_REPLY || (buffer.getShort(2) & 0xffff) != command) return null;
+        return buffer;
+    }
+
     /**
      * File size and sector size from an accepted start-download reply; null for other frames.
      * Throws with the refusal when the device refused.
      */
     static long[] downloadStarted(byte[] frame) {
-        byte[] body = withoutCrc(frame, frame.length);
-        if (body == null || body.length < 6) return null;
-        ByteBuffer buffer = ByteBuffer.wrap(body).order(ByteOrder.LITTLE_ENDIAN);
-        if ((buffer.getShort(0) & 0xffff) != COMMAND_REPLY || (buffer.getShort(2) & 0xffff) != COMMAND_START_DOWNLOAD) return null;
+        ByteBuffer buffer = commandReply(frame, COMMAND_START_DOWNLOAD);
+        if (buffer == null) return null;
         int status = buffer.getShort(4) & 0xffff;
         if (status == COMMAND_INVALID) throw new IllegalStateException("MOKUKU refused the recording. Check the access code.");
-        if (status != COMMAND_ACCEPTED || body.length < 16) throw new IllegalArgumentException("The recording is missing or unreadable.");
+        if (status != COMMAND_ACCEPTED || buffer.limit() < 16) throw new IllegalArgumentException("The recording is missing or unreadable.");
         long size = buffer.getInt(6) & 0xffffffffL;
         long sectorSize = buffer.getInt(10) & 0xffffffffL;
         if (size > Integer.MAX_VALUE || sectorSize == 0) throw new IllegalArgumentException("The recording is too large.");
         return new long[] {size, sectorSize};
+    }
+
+    /** Sector size and largest packet from an accepted firmware-update reply; null for other frames. */
+    static int[] firmwareUpdateStarted(byte[] frame) {
+        ByteBuffer buffer = commandReply(frame, COMMAND_START_FIRMWARE_UPDATE);
+        if (buffer == null) return null;
+        if ((buffer.getShort(4) & 0xffff) != COMMAND_ACCEPTED || buffer.limit() < 12) {
+            throw new IllegalArgumentException("MOKUKU II refused the firmware image. Check that it is a MOKUKU II app image.");
+        }
+        int sectorSize = buffer.getInt(6);
+        int packetSize = buffer.getShort(10) & 0xffff;
+        if (sectorSize <= 0 || packetSize <= PACKET_HEADER_SIZE) throw new IllegalArgumentException("Invalid firmware update reply.");
+        return new int[] {sectorSize, packetSize};
+    }
+
+    /** Sector, status, and next sector of an acknowledgement; null when its CRC fails. */
+    static int[] sectorAcknowledgement(byte[] frame) {
+        byte[] body = withoutCrc(frame, frame.length);
+        if (body == null || body.length != 6) return null;
+        ByteBuffer buffer = ByteBuffer.wrap(body).order(ByteOrder.LITTLE_ENDIAN);
+        return new int[] {buffer.getShort(0) & 0xffff, buffer.getShort(2) & 0xffff, buffer.getShort(4) & 0xffff};
+    }
+
+    /** A sector's packets of at most packetSize bytes; the last one ends with the sector's CRC. */
+    static List<byte[]> sectorPackets(int sector, byte[] data, int offset, int length, int packetSize) {
+        byte[] blob = withCrc(ByteBuffer.allocate(length + 2).order(ByteOrder.LITTLE_ENDIAN).put(data, offset, length));
+        int chunk = packetSize - PACKET_HEADER_SIZE;
+        List<byte[]> packets = new ArrayList<>();
+        for (int start = 0; start < blob.length; start += chunk) {
+            int end = Math.min(blob.length, start + chunk);
+            packets.add(ByteBuffer.allocate(PACKET_HEADER_SIZE + end - start).order(ByteOrder.LITTLE_ENDIAN)
+                    .putShort((short) sector).put((byte) (end == blob.length ? LAST_PACKET : packets.size()))
+                    .put(blob, start, end - start).array());
+        }
+        return packets;
     }
 
     static byte[] dateTime(int year, int month, int day, int hour, int minute) {
