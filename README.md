@@ -129,7 +129,7 @@ write the APK to the same `output/` directory on the host.
 | `artifacts/docker/dev.dockerfile` | Android build environment. |
 | `.github/workflows/android.yml` | GitHub Actions build, tests, lint, and APK artifact upload. |
 
-GitHub Actions runs `scripts/build.sh` for branch pushes and pull requests that
+GitHub Actions runs `scripts/build.sh` for pushes to `main`/`master` and pull requests that
 change `app/`, the Gradle build files/wrapper, the build helper, or the APK workflow
 itself. Markdown and changes confined to documentation or `design/` do not trigger
 an APK build. Manual runs remain available. Successful builds upload

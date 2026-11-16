@@ -6,7 +6,7 @@ Scope: two ESP32-S3 eyes. All control/file writes use Transfer Message
 Service: `4fafc201-1fb5-459e-8fcc-c5c9c331914b`.
 
 Source of truth: parent repository `IDF_SHARED/backend/ble_messager.cc`,
-`IDF_SHARED/sdcard/sd_card.c`, and `BleControl/monitor_app/ble_client.py`.
+`IDF_SHARED/sdcard/sd_card.c`, and `MOKUKU-BleControl/monitor_app/ble_client.py`.
 The parent `doc/BLE_CONTROL.md` is useful context; SD free/total ordering below
 follows the firmware. Setting a calendar date differs from the desktop client's
 clock-only time sync, as detailed below.

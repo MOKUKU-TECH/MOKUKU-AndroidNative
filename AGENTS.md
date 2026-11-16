@@ -18,7 +18,7 @@ operations. Implement native features only within the requested task's scope.
 
 When checked out inside `MobiliMOKUKU`, verify protocol behavior against
 `../IDF_SHARED/backend/ble_messager.cc`, `../IDF_SHARED/sdcard/sd_card.c`, and
-`../BleControl/monitor_app/`. Follow the parent repository's applicable instructions.
+`../MOKUKU-BleControl/monitor_app/`. Follow the parent repository's applicable instructions.
 For standalone checkouts, use the local protocol map and identify behavior that
 still needs firmware or hardware verification rather than guessing.
 
@@ -85,7 +85,7 @@ link and diff checks rather than an unrelated app rebuild.
 
 GitHub Actions is the CI build path. Do not add `.pipeline/`. Automatic APK builds
 watch app source and build inputs; documentation/design-only changes must not
-trigger them. Preserve the shared push/PR path filter, manual builds, and APK
+trigger them. Limit push builds to `main`/`master`; preserve the shared push/PR path filter, manual builds, and APK
 artifact upload. Inspect failed checks before reporting a PR ready. Do not add
 placeholder tests or new test infrastructure for minor visual or documentation changes.
 

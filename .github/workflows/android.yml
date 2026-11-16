@@ -2,7 +2,7 @@ name: Android debug APK
 
 on:
   push:
-    branches: ['**']
+    branches: [main, master]
     paths: &android_build_paths
       - 'app/**'
       - 'build.gradle'
