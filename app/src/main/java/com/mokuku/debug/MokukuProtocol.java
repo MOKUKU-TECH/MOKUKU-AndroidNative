@@ -20,7 +20,9 @@ final class MokukuProtocol {
     static final UUID FILE_DATA = UUID.fromString("737cbd9b-848b-4fad-87b8-5c3b9f75768d");
     static final UUID NOTIFICATIONS = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
     static final String RECORD_DIRECTORY = "/sd/record";
-    private static final Pattern RECORDING_NAME = Pattern.compile("mobili_[0-9]+\\.record");
+    // Start time YYYYMMDD_HHMMSS, recording_N before the time is known, and older mobili_N.record.
+    private static final Pattern RECORDING_NAME = Pattern.compile(
+            "[0-9]{8}_[0-9]{6}(_[0-9]{1,9})?\\.rec|recording_[0-9]{1,9}\\.rec|mobili_[0-9]{1,9}\\.record");
 
     private MokukuProtocol() {}
 
@@ -87,12 +89,22 @@ final class MokukuProtocol {
             if (isRecordingName(name) && !names.contains(name)) names.add(name);
         }
         Collections.sort(names, (left, right) -> {
-            String a = left.substring(7, left.length() - 7);
-            String b = right.substring(7, right.length() - 7);
-            int length = Integer.compare(b.length(), a.length());
-            return length == 0 ? b.compareTo(a) : length;
+            int group = Integer.compare(nameGroup(left), nameGroup(right));
+            if (group != 0) return group;
+            if (nameGroup(left) == 0) return right.compareTo(left);
+            return Long.compare(nameNumber(right), nameNumber(left));
         });
         return names;
+    }
+
+    // Newest first: timed names, then recording_N, then older mobili_N.
+    private static int nameGroup(String name) {
+        if (Character.isDigit(name.charAt(0))) return 0;
+        return name.startsWith("recording_") ? 1 : 2;
+    }
+
+    private static long nameNumber(String name) {
+        return Long.parseLong(name.substring(name.indexOf('_') + 1, name.indexOf('.')));
     }
 
     static final int COMMAND_START_DOWNLOAD = 2;

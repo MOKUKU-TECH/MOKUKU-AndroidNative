@@ -78,7 +78,8 @@ final class MokukuConnection {
         final Map<Integer, String> information;
         final Map<Integer, String> errors;
         final List<String> recordings;
-        final Map<String, File> downloads;
+        // Recording name to where this session saved it on the phone.
+        final Map<String, String> saved;
 
         Snapshot(MokukuConnection connection) {
             connected = connection.ready;
@@ -99,7 +100,7 @@ final class MokukuConnection {
             information = Collections.unmodifiableMap(new HashMap<>(connection.information));
             errors = Collections.unmodifiableMap(new HashMap<>(connection.errors));
             recordings = Collections.unmodifiableList(new ArrayList<>(connection.recordings));
-            downloads = Collections.unmodifiableMap(new HashMap<>(connection.downloads));
+            saved = Collections.unmodifiableMap(new HashMap<>(connection.saved));
         }
     }
 
@@ -129,7 +130,8 @@ final class MokukuConnection {
     private final Map<String, Device> devices = new LinkedHashMap<>();
     private final Map<Integer, String> information = new HashMap<>();
     private final Map<Integer, String> errors = new HashMap<>();
-    private final Map<String, File> downloads = new HashMap<>();
+    private final Map<String, String> saved = new HashMap<>();
+    private PhoneDownloads.Saver saver;
     private final ArrayDeque<Request> requests = new ArrayDeque<>();
     private List<String> recordings = new ArrayList<>();
     private volatile Listener listener;
@@ -183,13 +185,14 @@ final class MokukuConnection {
         adapter = manager == null ? null : manager.getAdapter();
         thread.start();
         worker = new Handler(thread.getLooper());
+        saver = PhoneDownloads.forContext(context);
         snapshot = new Snapshot(this);
         worker.post(() -> {
             android.content.SharedPreferences preferences = this.context.getSharedPreferences("device", Context.MODE_PRIVATE);
             address = preferences.getString("address", "");
             name = preferences.getString("name", "MOKUKU");
             recordingAccessCode = recordingAccessPreferences.getString(address, "");
-            updateDownloads();
+            deletePartialDownloads();
             publish();
         });
     }
@@ -269,12 +272,11 @@ final class MokukuConnection {
             stopScanOnWorker();
             disconnectOnWorker("Connecting…");
             if (!address.equals(deviceAddress)) {
-                information.clear(); errors.clear(); recordings.clear(); downloads.clear();
+                information.clear(); errors.clear(); recordings.clear(); saved.clear();
             }
             address = device.address;
             name = device.name;
             recordingAccessCode = recordingAccessPreferences.getString(address, "");
-            updateDownloads();
             context.getSharedPreferences("device", Context.MODE_PRIVATE).edit().putString("address", address).putString("name", name).apply();
             mtu = 23;
             try {
@@ -630,7 +632,7 @@ final class MokukuConnection {
                 list((value, failure) -> {
                     if (id != operationId) return;
                     if (failure == null) {
-                        try { recordings = MokukuProtocol.recordings(value); updateDownloads(); }
+                        try { recordings = MokukuProtocol.recordings(value); }
                         catch (IllegalArgumentException exception) { failure = exception.getMessage(); }
                     }
                     endOperation(failure == null ? "Recordings refreshed. The firmware may return a partial list." : failure);
@@ -639,19 +641,15 @@ final class MokukuConnection {
         });
     }
 
+    // Downloads arrive here before they are saved to the phone's Download folder.
     private File recordingDirectory() {
-        return new File(context.getFilesDir(), "recordings/" + address.replace(":", ""));
+        return new File(context.getCacheDir(), "recordings");
     }
 
-    private void updateDownloads() {
-        downloads.clear();
-        if (address.isEmpty()) return;
+    private void deletePartialDownloads() {
         File[] localFiles = recordingDirectory().listFiles();
         if (localFiles == null) return;
-        for (File local : localFiles) {
-            if (local.isFile() && MokukuProtocol.isRecordingName(local.getName())) downloads.put(local.getName(), local);
-            else if (local.isFile() && local.getName().startsWith("download-") && local.getName().endsWith(".partial")) local.delete();
-        }
+        for (File local : localFiles) if (local.isFile() && local.getName().endsWith(".partial")) local.delete();
     }
 
     void deleteRecording(String name, boolean all) {
@@ -807,12 +805,14 @@ final class MokukuConnection {
             acknowledge(sector - 1, MokukuProtocol.SECTOR_OK);
             if (received < total) { publish(); return; }
             output.close(); output = null;
-            File destination = new File(recordingDirectory(), downloadName);
-            if (!partial.renameTo(destination)) throw new IOException("Could not finish saving the recording.");
-            partial = null;
-            downloads.put(downloadName, destination);
-            endOperation("Downloaded " + downloadName + " to the app. Use Save to phone to choose a location.");
-        } catch (IOException exception) { endOperation(exception.getMessage()); }
+            String location = saver.save(partial, downloadName);
+            saved.put(downloadName, location);
+            endOperation("Saved " + downloadName + " to " + location + ".");
+        } catch (IOException exception) {
+            endOperation("Could not save the recording: " + exception.getMessage());
+        } catch (SecurityException exception) {
+            endOperation("Allow storage access to save recordings to Downloads.");
+        }
     }
 
     // Asks MOKUKU to resend the current sector after a CRC failure, a gap or a stall.

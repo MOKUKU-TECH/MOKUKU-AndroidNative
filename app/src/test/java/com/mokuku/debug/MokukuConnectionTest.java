@@ -82,8 +82,6 @@ public class MokukuConnectionTest {
 
     @Test public void disconnectClearsDeviceValuesAndPendingQueryErrorsButKeepsDownloads() throws Exception {
         MokukuConnection connection = connectedSession();
-        File saved = new File(RuntimeEnvironment.getApplication().getFilesDir(), "mobili_1.record");
-        assertTrue(saved.createNewFile() || saved.isFile());
         try {
             onWorker(connection, () -> {
                 Map<Integer, String> information = ReflectionHelpers.getField(connection, "information");
@@ -93,9 +91,9 @@ public class MokukuConnectionTest {
                 Map<Integer, String> errors = ReflectionHelpers.getField(connection, "errors");
                 errors.put(57, "sample-error");
                 List<String> recordings = ReflectionHelpers.getField(connection, "recordings");
-                recordings.add(saved.getName());
-                Map<String, File> downloads = ReflectionHelpers.getField(connection, "downloads");
-                downloads.put(saved.getName(), saved);
+                recordings.add("20261116_143512.rec");
+                Map<String, String> saved = ReflectionHelpers.getField(connection, "saved");
+                saved.put("20261116_143512.rec", "Download/MOKUKU/20261116_143512.rec");
                 ReflectionHelpers.setField(connection, "recordingAccessCode", "sample-code");
                 ReflectionHelpers.callInstanceMethod(connection, "refreshInformationOnWorker");
             });
@@ -108,9 +106,8 @@ public class MokukuConnectionTest {
             assertTrue(snapshot.recordings.isEmpty());
             assertFalse(snapshot.hasRecordingAccessCode);
             assertEquals("", ReflectionHelpers.getField(connection, "recordingAccessCode"));
-            assertEquals(saved, snapshot.downloads.get(saved.getName()));
-            assertTrue(saved.isFile());
-        } finally { connection.close(); saved.delete(); }
+            assertEquals("Download/MOKUKU/20261116_143512.rec", snapshot.saved.get("20261116_143512.rec"));
+        } finally { connection.close(); }
     }
 
     @Test @Config(sdk = {23, 35})
@@ -182,30 +179,45 @@ public class MokukuConnectionTest {
     }
 
     @Test @Config(sdk = {23, 35})
-    public void downloadReceivesCrcCheckedSectorsAndAcknowledgesEach() throws Exception {
+    public void downloadReceivesCrcCheckedSectorsAndSavesThemToThePhone() throws Exception {
         MokukuConnection connection = connectedSession();
-        File saved = null;
         try {
             byte[] expected = pattern(250);
             SectorPeer peer = new SectorPeer(connection, expected);
-            connection.download("mobili_9001.record");
+            connection.download("20261116_143512.rec");
             assertTrue("Download did not finish: " + connection.snapshot().message, peer.finished.await(5, TimeUnit.SECONDS));
             onWorker(connection, () -> {});
             MokukuConnection.Snapshot snapshot = connection.snapshot();
             assertFalse(snapshot.busy);
-            saved = snapshot.downloads.get("mobili_9001.record");
-            assertNotNull(saved);
-            assertArrayEquals(expected, Files.readAllBytes(saved.toPath()));
+            assertArrayEquals(expected, peer.phone.get("20261116_143512.rec"));
+            assertEquals("Download/MOKUKU/20261116_143512.rec", snapshot.saved.get("20261116_143512.rec"));
+            assertTrue(snapshot.message.contains("Download/MOKUKU/20261116_143512.rec"));
             assertEquals(java.util.Arrays.asList(1, 2, 3), peer.nextSectors);
             assertEquals(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT, (int) peer.startWriteType);
             assertEquals(BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE, (int) peer.acknowledgementWriteType);
             assertEquals(BluetoothGatt.CONNECTION_PRIORITY_BALANCED, shadowOf(peer.gatt).getConnectionPriority());
-        } finally { connection.close(); if (saved != null) saved.delete(); }
+            File[] left = new File(RuntimeEnvironment.getApplication().getCacheDir(), "recordings").listFiles();
+            assertTrue("Partial file left behind", left == null || left.length == 0);
+        } finally { connection.close(); }
+    }
+
+    @Test public void failedPhoneSaveReportsTheErrorAndKeepsNothing() throws Exception {
+        MokukuConnection connection = connectedSession();
+        try {
+            SectorPeer peer = new SectorPeer(connection, pattern(250));
+            onWorker(connection, () -> ReflectionHelpers.setField(connection, "saver",
+                    (PhoneDownloads.Saver) (source, name) -> { throw new java.io.IOException("Downloads is full"); }));
+            connection.download("20261116_143512.rec");
+            assertTrue(peer.finished.await(5, TimeUnit.SECONDS));
+            onWorker(connection, () -> {});
+            assertFalse(connection.snapshot().busy);
+            assertTrue(connection.snapshot().message.contains("Downloads is full"));
+            assertTrue(connection.snapshot().saved.isEmpty());
+        } finally { connection.close(); }
     }
 
     @Test public void corruptSectorAndRefusedStartAreRetried() throws Exception {
         MokukuConnection connection = connectedSession();
-        File saved = null;
         try {
             byte[] expected = pattern(250);
             SectorPeer peer = new SectorPeer(connection, expected);
@@ -218,12 +230,10 @@ public class MokukuConnectionTest {
             onWorker(connection, ReflectionHelpers.getField(connection, "startDownloadAgain"));
             assertTrue("Download did not finish: " + connection.snapshot().message, peer.finished.await(5, TimeUnit.SECONDS));
             onWorker(connection, () -> {});
-            saved = connection.snapshot().downloads.get("mobili_9005.record");
-            assertNotNull(saved);
-            assertArrayEquals(expected, Files.readAllBytes(saved.toPath()));
+            assertArrayEquals(expected, peer.phone.get("mobili_9005.record"));
             assertEquals(2, peer.starts.get());
             assertEquals(java.util.Arrays.asList(1, 1, 2, 3), peer.nextSectors);
-        } finally { connection.close(); if (saved != null) saved.delete(); }
+        } finally { connection.close(); }
     }
 
     @Test public void repeatedStallsStopTheDownloadAndDiscardThePartialFile() throws Exception {
@@ -261,7 +271,7 @@ public class MokukuConnectionTest {
             assertFalse(connection.snapshot().busy);
             assertFalse(partial.exists());
             assertEquals(1, peer.stops.get());
-            assertTrue(connection.snapshot().downloads.isEmpty());
+            assertTrue(connection.snapshot().saved.isEmpty());
             assertEquals(BluetoothGatt.CONNECTION_PRIORITY_BALANCED, shadowOf(peer.gatt).getConnectionPriority());
         } finally { connection.close(); }
     }
@@ -279,7 +289,7 @@ public class MokukuConnectionTest {
             onWorker(connection, () -> {});
             assertFalse(connection.snapshot().connected);
             assertFalse(connection.snapshot().busy);
-            assertTrue(connection.snapshot().downloads.isEmpty());
+            assertTrue(connection.snapshot().saved.isEmpty());
             assertFalse(partial.exists());
             assertFalse((boolean) ReflectionHelpers.getField(connection, "downloadPriorityRequested"));
             assertTrue(shadowOf(peer.gatt).isClosed());
@@ -318,6 +328,8 @@ public class MokukuConnectionTest {
         final java.util.concurrent.atomic.AtomicInteger stops = new java.util.concurrent.atomic.AtomicInteger();
         final CountDownLatch started = new CountDownLatch(1);
         final CountDownLatch refused = new CountDownLatch(1);
+        // The phone's Download folder.
+        final Map<String, byte[]> phone = new java.util.HashMap<>();
         final CountDownLatch finished = new CountDownLatch(1);
         Integer startWriteType;
         Integer acknowledgementWriteType;
@@ -335,6 +347,10 @@ public class MokukuConnectionTest {
             onWorker(connection, () -> {
                 ReflectionHelpers.setField(connection, "fileCommand", command);
                 ReflectionHelpers.setField(connection, "fileData", data);
+                ReflectionHelpers.setField(connection, "saver", (PhoneDownloads.Saver) (source, name) -> {
+                    phone.put(name, Files.readAllBytes(source.toPath()));
+                    return "Download/MOKUKU/" + name;
+                });
                 ReflectionHelpers.setField(connection, "mtu", 517);
                 ReflectionHelpers.setField(connection, "recordingAccessCode", "sample-code");
                 shadowOf(gatt).setGattCallback(new BluetoothGattCallback() {

@@ -33,9 +33,13 @@ public class MokukuProtocolTest {
         assertTrue(MokukuProtocol.voiceModel(new byte[] {57, 1, 2}).contains("Mandarin"));
     }
 
-    @Test public void listsOnlySafeRecordingNamesInNumericOrder() {
+    @Test public void listsOnlySafeRecordingNamesNewestFirst() {
         assertEquals(Arrays.asList("mobili_128.record", "mobili_12.record", "mobili_2.record"),
                 MokukuProtocol.recordings(reply(60, "mobili_2.record,mobili_12.record,../secret,mobili_128.record,mobili_2.record")));
+        assertEquals(Arrays.asList("20261116_143512_1.rec", "20261116_143512.rec", "20251231_235959.rec",
+                        "recording_10.rec", "recording_9.rec", "mobili_3.record"),
+                MokukuProtocol.recordings(reply(60, "recording_9.rec,mobili_3.record,20251231_235959.rec,"
+                        + "20261116_143512.rec,recording_10.rec,20261116_143512_1.rec,2026_1.rec,20261116_143512.record")));
         assertThrows(IllegalArgumentException.class, () -> MokukuProtocol.recordPath("../mobili_1.record"));
         assertThrows(IllegalArgumentException.class, () -> MokukuProtocol.textReply(new byte[] {60, 0}, 60));
     }

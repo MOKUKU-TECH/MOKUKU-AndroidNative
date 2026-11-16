@@ -95,8 +95,8 @@ claim: these cannot be inferred from a successful BLE connection or version quer
 
 Place a **Simulation** shortcut below the overview. **Tools**, the fourth tab,
 contains spacious **Updates** and **Debug** shortcuts. On disconnect, disable device
-actions and clear device values, query errors, and returned filenames. Keep completed
-phone downloads available.
+actions and clear device values, query errors, and returned filenames. Keep the saved
+locations of this session's downloads.
 
 ## Tools → Updates
 
@@ -179,8 +179,8 @@ open reply supplies its size. Below the byte count, show average payload speed i
 B/s, KiB/s, or MiB/s and approximate time remaining. Use elapsed monotonic time from
 the first read request; show **Estimating speed and time remaining…** until at least
 one second has elapsed and data has arrived. Reset estimates for each download;
-rotation preserves the current transfer. A completed file is available through Android's save
-or share flow. Only show **Saved to phone** after saving succeeds. Cancellation or
+rotation preserves the current transfer. A completed file is saved straight to the phone's
+`Download/MOKUKU` folder; only then show **Saved to** with its location. Cancellation or
 disconnect leaves the file retryable and must not label a partial file as complete.
 
 Handle disconnected, loading, no recordings, authorization failure, directory

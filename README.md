@@ -37,9 +37,11 @@ It supports the original MOKUKU only.
   **Recording access** first. Deletion first requests recording stop.
   Downloads show byte progress, average speed, and approximate time remaining
   after an initial estimation period.
-  Complete downloads are kept inside the app; **Save to phone** opens Android's
-  location picker. Device deletion keeps these copies. Cancel/disconnect discards
-  only an unfinished download; start it again to retry.
+  **Download to phone** saves the complete file to the phone's `Download/MOKUKU`
+  folder, renamed by Android if the name is taken; Android 9 and older first ask for
+  storage access. Recordings are named by their start time (`YYYYMMDD_HHMMSS.rec`).
+  Device deletion keeps phone copies. Cancel/disconnect discards only an unfinished
+  download; start it again to retry.
 - **Trips:** coming later.
 
 The phone sends commands over BLE; MOKUKU itself downloads OTA assets over its

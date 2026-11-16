@@ -48,21 +48,18 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class MainActivity extends Activity {
-    private interface FileFeedback { void completed(String message); }
     private static final int BLUETOOTH_PERMISSION = 10;
     private static final int ENABLE_BLUETOOTH = 11;
-    private static final int SAVE_RECORDING = 12;
+    private static final int STORAGE_PERMISSION = 12;
 
     private static final class Session {
         MokukuConnection connection;
         String route = "home";
         String wifiName = "";
         String remoteUrl = "";
-        File pendingSave;
-        boolean saving;
-        FileFeedback fileFeedback;
+        // Recording to download once Android 9 or older grants storage access.
+        String pendingDownload;
         final Map<String, Integer> scroll = new HashMap<>();
-        final ExecutorService files = Executors.newSingleThreadExecutor();
     }
 
     private Session session;
@@ -96,16 +93,7 @@ public final class MainActivity extends Activity {
         if (session == null) {
             session = new Session();
             session.connection = new MokukuConnection(this);
-            if (savedInstanceState != null) {
-                session.route = savedInstanceState.getString("route", "home");
-                String pending = savedInstanceState.getString("pending_save");
-                if (pending != null) {
-                    try {
-                        File file = new File(pending);
-                        if (file.isFile() && file.getCanonicalPath().startsWith(getFilesDir().getCanonicalPath() + File.separator)) session.pendingSave = file;
-                    } catch (IOException ignored) {}
-                }
-            }
+            if (savedInstanceState != null) session.route = savedInstanceState.getString("route", "home");
         }
         snapshot = session.connection.snapshot();
         setContentView(R.layout.activity_main);
@@ -115,7 +103,6 @@ public final class MainActivity extends Activity {
         feedback = findViewById(R.id.feedback);
         scroll = findViewById(R.id.content_scroll);
         session.connection.setListener(this::changed);
-        session.fileFeedback = message -> { if ("records".equals(session.route)) render(); feedback.setText(message); };
         if (Build.VERSION.SDK_INT >= 33) {
             backCallback = () -> { if (!goBack()) finish(); };
             getOnBackInvokedDispatcher().registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT, backCallback);
@@ -132,7 +119,6 @@ public final class MainActivity extends Activity {
 
     @Override protected void onSaveInstanceState(Bundle state) {
         state.putString("route", session.route);
-        if (session.pendingSave != null) state.putString("pending_save", session.pendingSave.getAbsolutePath());
         super.onSaveInstanceState(state);
     }
 
@@ -143,11 +129,7 @@ public final class MainActivity extends Activity {
             discovery.setOnDismissListener(null);
             discovery.dismiss();
         }
-        session.fileFeedback = null;
-        if (!isChangingConfigurations()) {
-            session.connection.close();
-            session.files.shutdown();
-        }
+        if (!isChangingConfigurations()) session.connection.close();
         if (Build.VERSION.SDK_INT >= 33 && backCallback != null) {
             getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(backCallback);
         }
@@ -614,25 +596,14 @@ public final class MainActivity extends Activity {
             TextView filename = ui.text(name, 15, R.color.text_primary);
             filename.setTypeface(Typeface.MONOSPACE);
             card.addView(filename);
-            card.addView(ui.muted("On MOKUKU · device recording"));
-            deviceButton(card, "Download", false, false, () -> session.connection.download(name));
+            String location = snapshot.saved.get(name);
+            card.addView(ui.muted(location == null ? "On MOKUKU · device recording" : "Saved to " + location));
+            deviceButton(card, location == null ? "Download to phone" : "Download again", false, false, () -> downloadRecording(name));
             deviceButton(card, "Delete from MOKUKU", false, true, () -> confirm("Delete device recording?", name + "\nRequests recording stop before deleting. Phone copies are kept.", "Delete", () -> session.connection.deleteRecording(name, false)));
         }
         content.addView(ui.muted("The firmware returns filenames only and may return a partial list. Device deletion keeps phone copies."));
         if (!snapshot.recordings.isEmpty()) deviceButton(content, "Clear all recordings", false, true, () -> confirm("Clear all recordings?",
                 "Requests recording stop, then removes device recordings, including ones you haven’t downloaded. Phone copies are kept.", "Clear all recordings", () -> session.connection.deleteRecording(null, true)));
-        if (!snapshot.downloads.isEmpty()) {
-            section("Downloaded to the app");
-            content.addView(ui.muted("These complete copies are kept when device recordings are deleted."));
-            for (Map.Entry<String, File> entry : snapshot.downloads.entrySet()) {
-                LinearLayout card = ui.card(content);
-                card.addView(ui.text(entry.getKey(), 15, R.color.text_primary));
-                Button save = ui.button(session.saving ? "Saving…" : "Save to phone", false, false);
-                save.setEnabled(!session.saving);
-                save.setOnClickListener(view -> saveFile(entry.getValue(), entry.getKey()));
-                ui.fullButton(card, save);
-            }
-        }
     }
 
     private EditText passwordField(LinearLayout parent, String label, String hint) {
@@ -682,13 +653,14 @@ public final class MainActivity extends Activity {
         progressText.setText(Ui.downloadProgressText(snapshot.received, snapshot.total, snapshot.downloadElapsedMilliseconds));
     }
 
-    private void saveFile(File source, String name) {
-        session.pendingSave = source;
-        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
-        intent.addCategory(Intent.CATEGORY_OPENABLE);
-        intent.setType("application/octet-stream");
-        intent.putExtra(Intent.EXTRA_TITLE, name);
-        startActivityForResult(intent, SAVE_RECORDING);
+    private void downloadRecording(String name) {
+        if (PhoneDownloads.needsStoragePermission()
+                && checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            session.pendingDownload = name;
+            requestPermissions(new String[] {android.Manifest.permission.WRITE_EXTERNAL_STORAGE}, STORAGE_PERMISSION);
+            return;
+        }
+        session.connection.download(name);
     }
 
     private void trips() {
@@ -778,6 +750,14 @@ public final class MainActivity extends Activity {
 
     @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
         super.onRequestPermissionsResult(requestCode, permissions, results);
+        if (requestCode == STORAGE_PERMISSION) {
+            String name = session.pendingDownload;
+            session.pendingDownload = null;
+            if (name == null) return;
+            if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) session.connection.download(name);
+            else feedback.setText("Allow storage access to save recordings to Downloads.");
+            return;
+        }
         if (requestCode != BLUETOOTH_PERMISSION) return;
         for (int result : results) {
             if (result != PackageManager.PERMISSION_GRANTED) {
@@ -793,31 +773,6 @@ public final class MainActivity extends Activity {
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == ENABLE_BLUETOOTH) { if (resultCode == RESULT_OK) findDevice(); return; }
-        if (requestCode != SAVE_RECORDING || resultCode != RESULT_OK || data == null || data.getData() == null || session.pendingSave == null) return;
-        File source = session.pendingSave;
-        Uri destination = data.getData();
-        Session owner = session;
-        ContentResolver resolver = getApplicationContext().getContentResolver();
-        owner.saving = true;
-        if ("records".equals(owner.route)) render();
-        owner.files.execute(() -> {
-            String result;
-            try (FileInputStream input = new FileInputStream(source); OutputStream output = resolver.openOutputStream(destination, "w")) {
-                if (output == null) throw new IOException("Could not open the selected destination.");
-                byte[] buffer = new byte[32768];
-                int count;
-                while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
-                result = "Recording saved to your selected phone location.";
-            } catch (IOException | SecurityException exception) {
-                try { android.provider.DocumentsContract.deleteDocument(resolver, destination); } catch (IOException | RuntimeException ignored) {}
-                result = "Could not save recording: " + exception.getMessage() + ". The app copy is kept; try Save to phone again.";
-            }
-            String message = result;
-            new Handler(Looper.getMainLooper()).post(() -> {
-                owner.saving = false;
-                if (owner.fileFeedback != null) owner.fileFeedback.completed(message);
-            });
-        });
+        if (requestCode == ENABLE_BLUETOOTH && resultCode == RESULT_OK) findDevice();
     }
 }
