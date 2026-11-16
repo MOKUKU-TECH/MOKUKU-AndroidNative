@@ -40,17 +40,34 @@ public class MokukuProtocolTest {
         assertThrows(IllegalArgumentException.class, () -> MokukuProtocol.textReply(new byte[] {60, 0}, 60));
     }
 
-    @Test public void validatesFileSizeOffsetAndPacketLength() {
-        byte[] opened = ByteBuffer.allocate(10).order(ByteOrder.LITTLE_ENDIAN).put((byte) 65).put((byte) 1).putInt(0xf0000001).putInt(3).array();
-        assertArrayEquals(new long[] {0xf0000001L, 3}, MokukuProtocol.openFile(opened));
-        byte[] packet = new byte[] {66, 3, 0, 0, 0, 0, 10, 20, 30};
-        assertArrayEquals(new byte[] {10, 20, 30}, MokukuProtocol.fileChunk(packet, 0, 3));
-        assertThrows(IllegalArgumentException.class, () -> MokukuProtocol.fileChunk(packet, 1, 4));
-        assertThrows(IllegalArgumentException.class, () -> MokukuProtocol.fileChunk(packet, 0, 2));
-        assertThrows(IllegalArgumentException.class, () -> MokukuProtocol.fileChunk(new byte[] {66, 0, 0, 0, 0, 0}, 0, 1));
-        assertThrows(IllegalArgumentException.class, () -> MokukuProtocol.fileChunk(Arrays.copyOf(packet, 8), 0, 3));
-        assertEquals(14, MokukuProtocol.unsigned(MokukuProtocol.readFile(1, 0, 23)[1]));
-        assertEquals(255, MokukuProtocol.unsigned(MokukuProtocol.readFile(1, 0, 517)[1]));
+    @Test public void framesSectorTransferCommandsWithCrc() {
+        assertEquals(0x31c3, MokukuProtocol.crc16("123456789".getBytes(StandardCharsets.US_ASCII), 0, 9, 0));
+        byte[] start = MokukuProtocol.startDownload("/sd/record/mobili_1.record");
+        byte[] body = MokukuProtocol.withoutCrc(start, start.length);
+        assertNotNull(body);
+        assertEquals(MokukuProtocol.COMMAND_START_DOWNLOAD, body[0]);
+        assertEquals("/sd/record/mobili_1.record", new String(body, 6, body.length - 6, StandardCharsets.UTF_8));
+        start[3] ^= 1;
+        assertNull(MokukuProtocol.withoutCrc(start, start.length));
+        assertArrayEquals(new byte[] {2, 0, 1, 0, 3, 0}, MokukuProtocol.withoutCrc(MokukuProtocol.acknowledgement(2, 1, 3), 8));
+    }
+
+    @Test public void decodesDownloadStartRepliesAndRefusals() {
+        assertArrayEquals(new long[] {1000, 4096}, MokukuProtocol.downloadStarted(startReply(0, 1000, 4096)));
+        assertThrows(IllegalStateException.class, () -> MokukuProtocol.downloadStarted(startReply(1, 0, 0)));
+        assertThrows(IllegalArgumentException.class, () -> MokukuProtocol.downloadStarted(startReply(2, 0, 0)));
+        byte[] corrupt = startReply(0, 1000, 4096);
+        corrupt[7] ^= 1;
+        assertNull(MokukuProtocol.downloadStarted(corrupt));
+    }
+
+    private static byte[] startReply(int status, int size, int sectorSize) {
+        byte[] frame = ByteBuffer.allocate(18).order(ByteOrder.LITTLE_ENDIAN).putShort((short) 3).putShort((short) 2)
+                .putShort((short) status).putInt(size).putInt(sectorSize).putShort((short) 0).array();
+        int crc = MokukuProtocol.crc16(frame, 0, 16, 0);
+        frame[16] = (byte) crc;
+        frame[17] = (byte) (crc >> 8);
+        return frame;
     }
 
     @Test public void encodesSelectedWallClockWithoutVehicleData() {

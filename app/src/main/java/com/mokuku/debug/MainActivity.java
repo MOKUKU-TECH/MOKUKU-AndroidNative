@@ -579,9 +579,15 @@ public final class MainActivity extends Activity {
         LinearLayout access = ui.card(content);
         access.addView(ui.text("Recording access", 18, R.color.text_primary));
         access.addView(ui.muted(snapshot.hasRecordingAccessCode
-                ? "Code entered for this connection. Cleared when you disconnect."
+                ? "Access code saved for this MOKUKU. Reused when you reconnect."
                 : "Enter your MOKUKU access code to load and manage recordings."));
         deviceButton(access, snapshot.hasRecordingAccessCode ? "Change access code" : "Enter access code", false, false, this::enterRecordingAccessCode);
+        if (snapshot.hasRecordingAccessCode) {
+            Button forget = ui.button("Forget access code", false, true);
+            forget.setEnabled(!snapshot.busy);
+            forget.setOnClickListener(view -> session.connection.forgetRecordingAccessCode());
+            ui.fullButton(access, forget);
+        }
         deviceButton(content, "Refresh recordings", false, false, () -> {
             if (snapshot.hasRecordingAccessCode) session.connection.refreshRecordings();
             else enterRecordingAccessCode();
@@ -650,7 +656,7 @@ public final class MainActivity extends Activity {
         });
         form.addView(reveal);
         AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Recording access")
-                .setMessage("Use the access code for this MOKUKU. Kept in memory until disconnect.")
+                .setMessage("Saved on this phone for this MOKUKU and reused when you reconnect.")
                 .setView(form).setNegativeButton("Cancel", null).setPositiveButton("Use code", null).create();
         recordingAccess = dialog;
         dialog.setOnShowListener(value -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {

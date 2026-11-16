@@ -4,6 +4,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Calendar;
 import java.util.Collections;
 import java.util.List;
@@ -15,6 +16,8 @@ final class MokukuProtocol {
     static final UUID SERVICE = UUID.fromString("4fafc201-1fb5-459e-8fcc-c5c9c331914b");
     static final UUID DATA = UUID.fromString("beb5483e-36e1-4688-b7f5-ea07361b26a8");
     static final UUID MESSAGE = UUID.fromString("d222e154-1a80-4e71-9a63-2aa2c0ce0a8c");
+    static final UUID FILE_COMMAND = UUID.fromString("18bf25fe-c5c8-40fe-ab13-9aa144d65b69");
+    static final UUID FILE_DATA = UUID.fromString("737cbd9b-848b-4fad-87b8-5c3b9f75768d");
     static final UUID NOTIFICATIONS = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
     static final String RECORD_DIRECTORY = "/sd/record";
     private static final Pattern RECORDING_NAME = Pattern.compile("mobili_[0-9]+\\.record");
@@ -92,36 +95,70 @@ final class MokukuProtocol {
         return names;
     }
 
-    static long[] openFile(byte[] packet) {
-        if (packet.length != 10 || packet[0] != 65 || packet[1] != 1) {
-            throw new IllegalArgumentException("Invalid file response.");
+    static final int COMMAND_START_DOWNLOAD = 2;
+    static final int COMMAND_REPLY = 3;
+    static final int COMMAND_STOP = 4;
+    static final int COMMAND_ACCEPTED = 0;
+    static final int COMMAND_INVALID = 1;
+    static final int SECTOR_OK = 0;
+    static final int SECTOR_CRC_ERROR = 1;
+    // Sequence number of a sector's last packet, which ends with the sector's CRC.
+    static final int LAST_PACKET = 0xff;
+    static final int PACKET_HEADER_SIZE = 3;
+
+    // CRC-16/XMODEM, as the firmware's esp_rom_crc16_be.
+    static int crc16(byte[] bytes, int offset, int length, int crc) {
+        for (int i = offset; i < offset + length; i++) {
+            crc ^= unsigned(bytes[i]) << 8;
+            for (int bit = 0; bit < 8; bit++) crc = (crc & 0x8000) != 0 ? (crc << 1) ^ 0x1021 : crc << 1;
         }
-        ByteBuffer buffer = ByteBuffer.wrap(packet).order(ByteOrder.LITTLE_ENDIAN);
-        long key = buffer.getInt(2) & 0xffffffffL;
+        return crc & 0xffff;
+    }
+
+    private static byte[] withCrc(ByteBuffer body) {
+        int length = body.position();
+        int crc = crc16(body.array(), 0, length, 0);
+        return Arrays.copyOf(body.putShort((short) crc).array(), length + 2);
+    }
+
+    /** The frame body without its trailing CRC, or null when the CRC does not match. */
+    static byte[] withoutCrc(byte[] frame, int length) {
+        if (length < 2) return null;
+        int crc = unsigned(frame[length - 2]) | unsigned(frame[length - 1]) << 8;
+        return crc == crc16(frame, 0, length - 2, 0) ? Arrays.copyOf(frame, length - 2) : null;
+    }
+
+    static byte[] startDownload(String path) {
+        byte[] text = path.getBytes(StandardCharsets.UTF_8);
+        return withCrc(ByteBuffer.allocate(text.length + 8).order(ByteOrder.LITTLE_ENDIAN)
+                .putShort((short) COMMAND_START_DOWNLOAD).putInt(0).put(text));
+    }
+
+    static byte[] stopTransfer() {
+        return withCrc(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putShort((short) COMMAND_STOP));
+    }
+
+    static byte[] acknowledgement(int sector, int status, int nextSector) {
+        return withCrc(ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN)
+                .putShort((short) sector).putShort((short) status).putShort((short) nextSector));
+    }
+
+    /**
+     * File size and sector size from an accepted start-download reply; null for other frames.
+     * Throws with the refusal when the device refused.
+     */
+    static long[] downloadStarted(byte[] frame) {
+        byte[] body = withoutCrc(frame, frame.length);
+        if (body == null || body.length < 6) return null;
+        ByteBuffer buffer = ByteBuffer.wrap(body).order(ByteOrder.LITTLE_ENDIAN);
+        if ((buffer.getShort(0) & 0xffff) != COMMAND_REPLY || (buffer.getShort(2) & 0xffff) != COMMAND_START_DOWNLOAD) return null;
+        int status = buffer.getShort(4) & 0xffff;
+        if (status == COMMAND_INVALID) throw new IllegalStateException("MOKUKU refused the recording. Check the access code.");
+        if (status != COMMAND_ACCEPTED || body.length < 16) throw new IllegalArgumentException("The recording is missing or unreadable.");
         long size = buffer.getInt(6) & 0xffffffffL;
-        if (key == 0 || size == 0 || size > Integer.MAX_VALUE) {
-            throw new IllegalArgumentException("The recording is missing, empty, or too large.");
-        }
-        return new long[] {key, size};
-    }
-
-    static byte[] readFile(long key, long offset, int mtu) {
-        int length = Math.min(255, mtu - 9);
-        if (length <= 0) throw new IllegalArgumentException("The Bluetooth packet size is too small.");
-        return ByteBuffer.allocate(10).order(ByteOrder.LITTLE_ENDIAN)
-                .put((byte) 66).put((byte) length).putInt((int) key).putInt((int) offset).array();
-    }
-
-    static byte[] fileChunk(byte[] packet, long offset, long total) {
-        if (packet.length < 6 || packet[0] != 66) throw new IllegalArgumentException("Invalid recording packet.");
-        int length = unsigned(packet[1]);
-        long actualOffset = ByteBuffer.wrap(packet).order(ByteOrder.LITTLE_ENDIAN).getInt(2) & 0xffffffffL;
-        if (packet.length != length + 6 || actualOffset != offset || length == 0 || offset + length > total) {
-            throw new IllegalArgumentException("Recording data was incomplete or out of order. Download again.");
-        }
-        byte[] bytes = new byte[length];
-        System.arraycopy(packet, 6, bytes, 0, length);
-        return bytes;
+        long sectorSize = buffer.getInt(10) & 0xffffffffL;
+        if (size > Integer.MAX_VALUE || sectorSize == 0) throw new IllegalArgumentException("The recording is too large.");
+        return new long[] {size, sectorSize};
     }
 
     static byte[] dateTime(int year, int month, int day, int hour, int minute) {

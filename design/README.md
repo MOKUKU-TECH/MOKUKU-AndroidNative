@@ -147,9 +147,12 @@ recording file was created.
 
 Place a **Recording access** card above the file controls. **Enter access code**
 opens a masked dialog with optional reveal and **Use code** / **Cancel** actions.
-Using a code refreshes recordings; label it **Code entered**, without claiming
-authentication succeeded. **Change access code** opens a blank field. Keep the code
-in memory through navigation/rotation, then clear it on disconnect or app exit.
+Using a code saves it privately for this device's BLE address and refreshes
+recordings. Show that the code is saved without claiming authentication succeeded.
+Reuse it after reconnect or app restart. **Change access code** opens a blank field;
+**Forget access code** removes only this device's saved code and keeps downloaded
+copies. Allow forgetting while disconnected; disable it during an operation.
+Exclude saved codes from backup and device transfer.
 Never include entered codes in previews. The browser prototype remains a sample-data
 reference; this access dialog is implemented in the native app.
 

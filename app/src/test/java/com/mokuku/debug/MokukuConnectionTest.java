@@ -5,6 +5,8 @@ import android.bluetooth.BluetoothGattCallback;
 import android.bluetooth.BluetoothGattCharacteristic;
 import android.bluetooth.BluetoothGattService;
 import android.os.Handler;
+import android.content.Context;
+import android.content.SharedPreferences;
 import java.io.File;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -13,7 +15,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.Test;
@@ -113,99 +114,167 @@ public class MokukuConnectionTest {
     }
 
     @Test @Config(sdk = {23, 35})
-    public void downloadUsesFastWritesAndWaitsForBothCallbacksBeforeNextChunk() throws Exception {
+    public void savedCodeSurvivesDisconnectAndNewSessionAndIsReusedForListing() throws Exception {
+        MokukuConnection first = connectedSession();
+        try {
+            first.setRecordingAccessCode("sample-saved-code");
+            onWorker(first, () -> {});
+            first.disconnect();
+            onWorker(first, () -> {});
+            assertFalse(first.snapshot().connected);
+            assertTrue(first.snapshot().hasRecordingAccessCode);
+        } finally { first.close(); }
+
+        MokukuConnection reopened = connectedSession();
+        try {
+            assertTrue(reopened.snapshot().hasRecordingAccessCode);
+            List<byte[]> writes = new ArrayList<>();
+            CountDownLatch listed = new CountDownLatch(1);
+            BluetoothGatt gatt = ReflectionHelpers.getField(reopened, "gatt");
+            BluetoothGattCallback callback = ReflectionHelpers.getField(reopened, "gattCallback");
+            shadowOf(gatt).setGattCallback(new BluetoothGattCallback() {
+                @Override public void onCharacteristicWrite(BluetoothGatt value, BluetoothGattCharacteristic characteristic, int status) {
+                    byte[] packet = characteristic.getValue().clone();
+                    writes.add(packet);
+                    callback.onCharacteristicWrite(value, characteristic, status);
+                    if (packet[0] == 60) listed.countDown();
+                }
+            });
+            reopened.refreshRecordings();
+            assertTrue(listed.await(5, TimeUnit.SECONDS));
+            assertArrayEquals(MokukuProtocol.stringMessage(44, "sample-saved-code", 255), writes.get(0));
+            assertEquals(60, writes.get(1)[0]);
+            assertFalse(reopened.snapshot().message.contains("sample-saved-code"));
+        } finally { reopened.close(); }
+    }
+
+    @Test @Config(sdk = {23, 35})
+    public void replacingAndForgettingSavedCodeAffectsOnlySelectedDevice() throws Exception {
+        SharedPreferences codes = RuntimeEnvironment.getApplication().getSharedPreferences("recording_access", Context.MODE_PRIVATE);
+        codes.edit().putString("AA:BB:CC:DD:EE:FF", "sample-first")
+                .putString("11:22:33:44:55:66", "sample-second").apply();
+        MokukuConnection first = connectedSession();
+        try {
+            first.setRecordingAccessCode("");
+            onWorker(first, () -> {});
+            assertEquals("sample-first", codes.getString("AA:BB:CC:DD:EE:FF", ""));
+            first.setRecordingAccessCode("sample-replacement");
+            onWorker(first, () -> {});
+            first.forgetRecordingAccessCode();
+            onWorker(first, () -> {});
+            assertEquals("sample-replacement", codes.getString("AA:BB:CC:DD:EE:FF", ""));
+            first.disconnect();
+            onWorker(first, () -> {});
+            first.forgetRecordingAccessCode();
+            onWorker(first, () -> {});
+            assertFalse(first.snapshot().hasRecordingAccessCode);
+            assertFalse(codes.contains("AA:BB:CC:DD:EE:FF"));
+            assertEquals("sample-second", codes.getString("11:22:33:44:55:66", ""));
+        } finally { first.close(); }
+
+        MokukuConnection reopened = connectedSession();
+        try { assertFalse(reopened.snapshot().hasRecordingAccessCode); }
+        finally { reopened.close(); }
+
+        MokukuConnection other = connectedSession("11:22:33:44:55:66");
+        try { assertEquals("sample-second", ReflectionHelpers.getField(other, "recordingAccessCode")); }
+        finally { other.close(); }
+    }
+
+    @Test @Config(sdk = {23, 35})
+    public void downloadReceivesCrcCheckedSectorsAndAcknowledgesEach() throws Exception {
         MokukuConnection connection = connectedSession();
         File saved = null;
         try {
-            DownloadPeer peer = new DownloadPeer(connection, true, 517, 258);
-            peer.holdReadCompletion = true;
+            byte[] expected = pattern(250);
+            SectorPeer peer = new SectorPeer(connection, expected);
             connection.download("mobili_9001.record");
-            byte[] first = peer.nextRead();
-            onWorker(connection, () -> {});
-            assertEquals(BluetoothGatt.CONNECTION_PRIORITY_HIGH, shadowOf(peer.gatt).getConnectionPriority());
-            assertEquals(255, MokukuProtocol.unsigned(first[1]));
-            assertEquals(BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE, (int) peer.writeTypes.get(2));
-            assertEquals(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT, (int) peer.writeTypes.get(0));
-            assertEquals(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT, (int) peer.writeTypes.get(1));
-
-            byte[] expected = new byte[258];
-            for (int i = 0; i < expected.length; i++) expected[i] = (byte) i;
-            peer.notifyChunk(0, java.util.Arrays.copyOf(expected, 255));
-            onWorker(connection, () -> {});
-            assertTrue("Next write started before the previous local write completed", peer.reads.isEmpty());
-            assertEquals(0L, (long) ReflectionHelpers.getField(connection, "received"));
-
-            peer.holdReadCompletion = false;
-            peer.completeReadWrite();
-            byte[] second = peer.nextRead();
-            assertEquals(255, ByteBuffer.wrap(second).order(ByteOrder.LITTLE_ENDIAN).getInt(6));
-            peer.notifyChunk(255, java.util.Arrays.copyOfRange(expected, 255, 258));
+            assertTrue("Download did not finish: " + connection.snapshot().message, peer.finished.await(5, TimeUnit.SECONDS));
             onWorker(connection, () -> {});
             MokukuConnection.Snapshot snapshot = connection.snapshot();
             assertFalse(snapshot.busy);
             saved = snapshot.downloads.get("mobili_9001.record");
             assertNotNull(saved);
             assertArrayEquals(expected, Files.readAllBytes(saved.toPath()));
+            assertEquals(java.util.Arrays.asList(1, 2, 3), peer.nextSectors);
+            assertEquals(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT, (int) peer.startWriteType);
+            assertEquals(BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE, (int) peer.acknowledgementWriteType);
             assertEquals(BluetoothGatt.CONNECTION_PRIORITY_BALANCED, shadowOf(peer.gatt).getConnectionPriority());
-
-            connection.command(43, "Left click");
-            assertTrue(peer.commandSent.await(5, TimeUnit.SECONDS));
-            assertEquals(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT, (int) peer.writeTypes.get(4));
         } finally { connection.close(); if (saved != null) saved.delete(); }
     }
 
-    @Test @Config(sdk = {23, 35})
-    public void smallMtuAndAcknowledgedOnlyCharacteristicRemainUsableAndCancelRestoresPriority() throws Exception {
+    @Test public void corruptSectorAndRefusedStartAreRetried() throws Exception {
+        MokukuConnection connection = connectedSession();
+        File saved = null;
+        try {
+            byte[] expected = pattern(250);
+            SectorPeer peer = new SectorPeer(connection, expected);
+            peer.refusals = 1;
+            peer.corruptSector = 1;
+            connection.download("mobili_9005.record");
+            assertTrue(peer.refused.await(5, TimeUnit.SECONDS));
+            onWorker(connection, () -> {});
+            // The paused test clock never fires the delayed retry.
+            onWorker(connection, ReflectionHelpers.getField(connection, "startDownloadAgain"));
+            assertTrue("Download did not finish: " + connection.snapshot().message, peer.finished.await(5, TimeUnit.SECONDS));
+            onWorker(connection, () -> {});
+            saved = connection.snapshot().downloads.get("mobili_9005.record");
+            assertNotNull(saved);
+            assertArrayEquals(expected, Files.readAllBytes(saved.toPath()));
+            assertEquals(2, peer.starts.get());
+            assertEquals(java.util.Arrays.asList(1, 1, 2, 3), peer.nextSectors);
+        } finally { connection.close(); if (saved != null) saved.delete(); }
+    }
+
+    @Test public void repeatedStallsStopTheDownloadAndDiscardThePartialFile() throws Exception {
         MokukuConnection connection = connectedSession();
         try {
-            DownloadPeer peer = new DownloadPeer(connection, false, 64, 100);
-            connection.download("mobili_9002.record");
-            assertEquals(55, MokukuProtocol.unsigned(peer.nextRead()[1]));
+            SectorPeer peer = new SectorPeer(connection, pattern(250));
+            peer.silent = true;
+            connection.download("mobili_9006.record");
+            assertTrue(peer.started.await(5, TimeUnit.SECONDS));
             onWorker(connection, () -> {});
-            assertEquals(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT, (int) peer.writeTypes.get(2));
+            File partial = ReflectionHelpers.getField(connection, "partial");
+            Runnable stall = ReflectionHelpers.getField(connection, "sectorTimeout");
+            for (int i = 0; i < 4; i++) onWorker(connection, stall);
+            onWorker(connection, () -> {});
+            assertFalse(connection.snapshot().busy);
+            assertTrue(connection.snapshot().message.contains("stopped sending"));
+            assertFalse(partial.exists());
+            assertTrue("Stop was not sent", peer.stops.get() > 0);
+        } finally { connection.close(); }
+    }
+
+    @Test public void cancelStopsTheTransferAndRestoresPriority() throws Exception {
+        MokukuConnection connection = connectedSession();
+        try {
+            SectorPeer peer = new SectorPeer(connection, pattern(250));
+            peer.silent = true;
+            connection.download("mobili_9002.record");
+            assertTrue(peer.started.await(5, TimeUnit.SECONDS));
+            onWorker(connection, () -> {});
+            assertEquals(BluetoothGatt.CONNECTION_PRIORITY_HIGH, shadowOf(peer.gatt).getConnectionPriority());
             File partial = ReflectionHelpers.getField(connection, "partial");
             connection.cancelOperation();
             onWorker(connection, () -> {});
+            onWorker(connection, () -> {});
             assertFalse(connection.snapshot().busy);
             assertFalse(partial.exists());
-            assertEquals(BluetoothGatt.CONNECTION_PRIORITY_BALANCED, shadowOf(peer.gatt).getConnectionPriority());
-            peer.notifyChunk(0, new byte[55]);
-            onWorker(connection, () -> {});
-            assertTrue(peer.reads.isEmpty());
+            assertEquals(1, peer.stops.get());
             assertTrue(connection.snapshot().downloads.isEmpty());
+            assertEquals(BluetoothGatt.CONNECTION_PRIORITY_BALANCED, shadowOf(peer.gatt).getConnectionPriority());
         } finally { connection.close(); }
     }
 
-    @Test @Config(sdk = {23, 35})
-    public void invalidChunkStopsFastDownloadAndRestoresPriority() throws Exception {
+    @Test public void disconnectDuringDownloadDiscardsPartialFileAndClearsPriorityState() throws Exception {
         MokukuConnection connection = connectedSession();
         try {
-            DownloadPeer peer = new DownloadPeer(connection, true, 517, 100);
-            connection.download("mobili_9003.record");
-            peer.nextRead();
-            onWorker(connection, () -> {});
-            File partial = ReflectionHelpers.getField(connection, "partial");
-            peer.notifyChunk(1, new byte[99]);
-            onWorker(connection, () -> {});
-            assertFalse(connection.snapshot().busy);
-            assertTrue(connection.snapshot().message.contains("out of order"));
-            assertTrue(connection.snapshot().downloads.isEmpty());
-            assertFalse(partial.exists());
-            assertEquals(BluetoothGatt.CONNECTION_PRIORITY_BALANCED, shadowOf(peer.gatt).getConnectionPriority());
-            assertTrue(peer.reads.isEmpty());
-        } finally { connection.close(); }
-    }
-
-    @Test public void disconnectDuringFastDownloadDiscardsPartialFileAndClearsPriorityState() throws Exception {
-        MokukuConnection connection = connectedSession();
-        try {
-            DownloadPeer peer = new DownloadPeer(connection, true, 517, 300);
+            SectorPeer peer = new SectorPeer(connection, pattern(250));
+            peer.silent = true;
             connection.download("mobili_9004.record");
-            peer.nextRead();
+            assertTrue(peer.started.await(5, TimeUnit.SECONDS));
             onWorker(connection, () -> {});
             File partial = ReflectionHelpers.getField(connection, "partial");
-            peer.notifyChunk(0, new byte[255]);
-            peer.nextRead();
             connection.disconnect();
             onWorker(connection, () -> {});
             assertFalse(connection.snapshot().connected);
@@ -217,74 +286,140 @@ public class MokukuConnectionTest {
         } finally { connection.close(); }
     }
 
-    private final class DownloadPeer {
+    @Test public void firmwareWithoutSectorTransferAsksForAnUpdate() throws Exception {
+        MokukuConnection connection = connectedSession();
+        try {
+            connection.download("mobili_9003.record");
+            onWorker(connection, () -> {});
+            assertFalse(connection.snapshot().busy);
+            assertTrue(connection.snapshot().message.contains("Update MOKUKU's firmware"));
+        } finally { connection.close(); }
+    }
+
+    private static byte[] pattern(int length) {
+        byte[] bytes = new byte[length];
+        for (int i = 0; i < length; i++) bytes[i] = (byte) (i * 7);
+        return bytes;
+    }
+
+    /** MOKUKU's side of the sector transfer: 100-byte sectors in 40-byte packets. */
+    private final class SectorPeer {
+        static final int SECTOR_SIZE = 100;
+        static final int CHUNK = 40;
         final BluetoothGatt gatt;
         final BluetoothGattCallback callback;
-        final BluetoothGattCharacteristic messages;
-        final BluetoothGattCharacteristic data = new BluetoothGattCharacteristic(MokukuProtocol.DATA,
-                BluetoothGattCharacteristic.PROPERTY_NOTIFY, 0);
-        final LinkedBlockingQueue<byte[]> reads = new LinkedBlockingQueue<>();
-        final List<Integer> writeTypes = new ArrayList<>();
-        final CountDownLatch commandSent = new CountDownLatch(1);
-        volatile boolean holdReadCompletion;
+        final byte[] file;
+        final BluetoothGattCharacteristic command = new BluetoothGattCharacteristic(MokukuProtocol.FILE_COMMAND,
+                BluetoothGattCharacteristic.PROPERTY_WRITE | BluetoothGattCharacteristic.PROPERTY_NOTIFY, 0);
+        final BluetoothGattCharacteristic data = new BluetoothGattCharacteristic(MokukuProtocol.FILE_DATA,
+                BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE | BluetoothGattCharacteristic.PROPERTY_NOTIFY, 0);
+        final List<Integer> nextSectors = new ArrayList<>();
+        final java.util.concurrent.atomic.AtomicInteger starts = new java.util.concurrent.atomic.AtomicInteger();
+        final java.util.concurrent.atomic.AtomicInteger stops = new java.util.concurrent.atomic.AtomicInteger();
+        final CountDownLatch started = new CountDownLatch(1);
+        final CountDownLatch refused = new CountDownLatch(1);
+        final CountDownLatch finished = new CountDownLatch(1);
+        Integer startWriteType;
+        Integer acknowledgementWriteType;
+        int refusals;
+        int corruptSector = -1;
+        boolean silent;
 
-        DownloadPeer(MokukuConnection connection, boolean fastWrites, int mtu, int fileSize) throws Exception {
+        SectorPeer(MokukuConnection connection, byte[] file) throws Exception {
+            this.file = file;
             gatt = ReflectionHelpers.getField(connection, "gatt");
             callback = ReflectionHelpers.getField(connection, "gattCallback");
             BluetoothGattService service = new BluetoothGattService(MokukuProtocol.SERVICE, BluetoothGattService.SERVICE_TYPE_PRIMARY);
-            messages = new BluetoothGattCharacteristic(MokukuProtocol.MESSAGE,
-                    BluetoothGattCharacteristic.PROPERTY_WRITE | (fastWrites ? BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE : 0),
-                    BluetoothGattCharacteristic.PERMISSION_WRITE);
-            service.addCharacteristic(messages);
+            service.addCharacteristic(command);
             service.addCharacteristic(data);
             onWorker(connection, () -> {
-                ReflectionHelpers.setField(connection, "messages", messages);
-                ReflectionHelpers.setField(connection, "mtu", mtu);
+                ReflectionHelpers.setField(connection, "fileCommand", command);
+                ReflectionHelpers.setField(connection, "fileData", data);
+                ReflectionHelpers.setField(connection, "mtu", 517);
                 ReflectionHelpers.setField(connection, "recordingAccessCode", "sample-code");
                 shadowOf(gatt).setGattCallback(new BluetoothGattCallback() {
                     @Override public void onCharacteristicWrite(BluetoothGatt value, BluetoothGattCharacteristic characteristic, int status) {
                         byte[] packet = characteristic.getValue().clone();
-                        writeTypes.add(((TransferGatt) Shadow.extract(value)).writeType);
-                        if (packet[0] != 66 || !holdReadCompletion) callback.onCharacteristicWrite(value, characteristic, status);
-                        if (packet[0] == 65) {
-                            byte[] opened = ByteBuffer.allocate(10).order(ByteOrder.LITTLE_ENDIAN)
-                                    .put((byte) 65).put((byte) 1).putInt(123).putInt(fileSize).array();
-                            notifyPacket(opened);
-                        } else if (packet[0] == 66) reads.add(packet);
-                        else if (packet[0] == 1) {
-                            notifyPacket(new byte[] {1, 1});
-                            commandSent.countDown();
-                        }
+                        int writeType = ((TransferGatt) Shadow.extract(value)).writeType;
+                        callback.onCharacteristicWrite(value, characteristic, status);
+                        if (characteristic.getUuid().equals(MokukuProtocol.FILE_COMMAND)) command(packet, writeType);
+                        else if (characteristic.getUuid().equals(MokukuProtocol.FILE_DATA)) acknowledgement(packet, writeType);
                     }
                 });
             });
         }
 
-        byte[] nextRead() throws Exception {
-            byte[] packet = reads.poll(5, TimeUnit.SECONDS);
-            assertNotNull("File read was not sent", packet);
-            return packet;
+        private void command(byte[] frame, int writeType) {
+            ByteBuffer body = ByteBuffer.wrap(MokukuProtocol.withoutCrc(frame, frame.length)).order(ByteOrder.LITTLE_ENDIAN);
+            int command = body.getShort(0);
+            if (command == MokukuProtocol.COMMAND_STOP) { stops.incrementAndGet(); return; }
+            assertEquals(MokukuProtocol.COMMAND_START_DOWNLOAD, command);
+            starts.incrementAndGet();
+            startWriteType = writeType;
+            if (refusals-- > 0) { notify(this.command, reply(MokukuProtocol.COMMAND_INVALID)); refused.countDown(); return; }
+            notify(this.command, reply(MokukuProtocol.COMMAND_ACCEPTED));
+            started.countDown();
+            if (!silent) sendSector(0);
         }
 
-        void completeReadWrite() { callback.onCharacteristicWrite(gatt, messages, BluetoothGatt.GATT_SUCCESS); }
+        private byte[] reply(int status) {
+            ByteBuffer body = ByteBuffer.allocate(18).order(ByteOrder.LITTLE_ENDIAN)
+                    .putShort((short) MokukuProtocol.COMMAND_REPLY).putShort((short) MokukuProtocol.COMMAND_START_DOWNLOAD)
+                    .putShort((short) status).putInt(file.length).putInt(SECTOR_SIZE).putShort((short) 0);
+            return withCrc(body.array(), 16);
+        }
 
-        void notifyChunk(int offset, byte[] bytes) {
-            byte[] packet = ByteBuffer.allocate(6 + bytes.length).order(ByteOrder.LITTLE_ENDIAN)
-                    .put((byte) 66).put((byte) bytes.length).putInt(offset).put(bytes).array();
-            notifyPacket(packet);
+        private void acknowledgement(byte[] frame, int writeType) {
+            acknowledgementWriteType = writeType;
+            ByteBuffer body = ByteBuffer.wrap(MokukuProtocol.withoutCrc(frame, frame.length)).order(ByteOrder.LITTLE_ENDIAN);
+            int next = body.getShort(4);
+            nextSectors.add(next);
+            if (silent) return;
+            if (next * SECTOR_SIZE >= file.length) finished.countDown();
+            else sendSector(next);
+        }
+
+        private void sendSector(int index) {
+            int start = index * SECTOR_SIZE;
+            byte[] body = java.util.Arrays.copyOfRange(file, start, Math.min(file.length, start + SECTOR_SIZE));
+            byte[] sector = withCrc(body, body.length);
+            if (index == corruptSector) { sector[0] ^= 1; corruptSector = -1; }
+            for (int offset = 0, sequence = 0; offset < sector.length; offset += CHUNK, sequence++) {
+                int length = Math.min(CHUNK, sector.length - offset);
+                boolean last = offset + length == sector.length;
+                ByteBuffer packet = ByteBuffer.allocate(3 + length).order(ByteOrder.LITTLE_ENDIAN)
+                        .putShort((short) index).put((byte) (last ? MokukuProtocol.LAST_PACKET : sequence));
+                packet.put(sector, offset, length);
+                notify(data, packet.array());
+            }
+        }
+
+        /** Writes the CRC of bytes[0, length) into bytes[length, length + 2). */
+        private byte[] withCrc(byte[] bytes, int length) {
+            byte[] frame = java.util.Arrays.copyOf(bytes, length + 2);
+            int crc = MokukuProtocol.crc16(frame, 0, length, 0);
+            frame[length] = (byte) crc;
+            frame[length + 1] = (byte) (crc >> 8);
+            return frame;
         }
 
         @SuppressWarnings("deprecation")
-        private void notifyPacket(byte[] packet) {
-            data.setValue(packet);
-            callback.onCharacteristicChanged(gatt, data);
+        private void notify(BluetoothGattCharacteristic characteristic, byte[] packet) {
+            characteristic.setValue(packet);
+            callback.onCharacteristicChanged(gatt, characteristic);
         }
     }
 
     private MokukuConnection connectedSession() throws Exception {
+        return connectedSession("AA:BB:CC:DD:EE:FF");
+    }
+
+    private MokukuConnection connectedSession(String address) throws Exception {
+        RuntimeEnvironment.getApplication().getSharedPreferences("device", Context.MODE_PRIVATE)
+                .edit().putString("address", address).apply();
         MokukuConnection connection = new MokukuConnection(RuntimeEnvironment.getApplication());
         onWorker(connection, () -> {
-            BluetoothGatt gatt = ShadowBluetoothGatt.newInstance(ShadowBluetoothDevice.newInstance("AA:BB:CC:DD:EE:FF"));
+            BluetoothGatt gatt = ShadowBluetoothGatt.newInstance(ShadowBluetoothDevice.newInstance(address));
             BluetoothGattService service = new BluetoothGattService(MokukuProtocol.SERVICE, BluetoothGattService.SERVICE_TYPE_PRIMARY);
             BluetoothGattCharacteristic messages = new BluetoothGattCharacteristic(MokukuProtocol.MESSAGE,
                     BluetoothGattCharacteristic.PROPERTY_WRITE, BluetoothGattCharacteristic.PERMISSION_WRITE);

@@ -31,25 +31,26 @@ clock-only time sync, as detailed below.
 | List recordings | `3C len /sd/record` (60) | ID, success, comma-separated names; no metadata or pagination |
 | Delete recording | `3E len /sd/record/name` (62) | No guaranteed operation-specific acknowledgement; refresh to verify |
 | Clear all recordings | Repeated list (60) and per-file delete (62) | No bulk-delete command; repeat batches until no names return, detect no progress, preserve phone copies; empty results also occur on directory failure |
-| Open download | `41 len /sd/record/name` (65) | 10 bytes: ID, success, file key LE32, size LE32 |
-| Read download chunk | `42 requested_length key_LE32 offset_LE32` (66) | ID, length, offset LE32, bytes; validate offset and continue to advertised size |
+| Download recording | File Command start `02 00`, offset LE32 `0`, path, CRC16 | Reply: size LE32, sector size LE32, prefix CRC16; then File Data sectors |
 
-File replies are limited to `min(requested_length, negotiated_MTU - 9)` bytes,
-with a one-byte length limiting requests to 255. The firmware accepts writes both
-with and without ATT response on Transfer Message. Android uses
-write-without-response only for chunk requests when advertised, while still
-waiting for local write completion and the validated notification before the next
-request. Downloads request high connection priority and restore balanced priority
-on completion, failure, or cancellation; throughput needs phone verification.
+Downloads use the sector file transfer shared with MOKUKU II (MobiliMOKUKU
+`doc/MOKUKU_II_BLE_CONTROL.md`). Each File Data packet is sector LE16, sequence
+number, bytes; sequence `FF` marks the last packet, which ends with the sector's
+CRC-16/XMODEM. Android acknowledges every sector on File Data with sector LE16,
+status LE16 (0 OK, 1 resend), and next sector LE16. MOKUKU refuses a path
+(status 1) until message 44 carries the access code; the code is applied on another
+task, so Android retries a refused start up to three times.
 
 Hex byte values are shown without a prefix; parenthesized command numbers are
 decimal. Length-prefixed paths and strings count UTF-8 bytes, not characters.
 Firmware handlers use strings as C strings in several places; the implementation
 must match the existing desktop client's framing and test against a physical device.
 
-File list, open/read, and delete require the existing developer authorization
+File list, download, and delete require the existing developer authorization
 exchange on message ID 44. Collect the code in the native Data Collection dialog
-and keep it in memory for the current connection. ID 44 has no application reply;
+and save it in app-private preferences keyed by BLE device address. Restore it
+after reconnect or app restart; changing or forgetting affects only that device.
+Exclude saved codes from backup and device transfer. ID 44 has no application reply;
 GATT write completion does not prove authorization. A rejected code can leave file
 requests unanswered. Do not invent a MOKUKU II set/get handshake or include codes in
 logs, previews, source, or build configuration.

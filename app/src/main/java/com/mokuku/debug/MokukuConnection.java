@@ -17,6 +17,7 @@ import android.bluetooth.le.ScanFilter;
 import android.bluetooth.le.ScanResult;
 import android.bluetooth.le.ScanSettings;
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -25,6 +26,7 @@ import android.os.ParcelUuid;
 import android.util.Log;
 
 import java.io.BufferedOutputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -40,6 +42,10 @@ import java.util.UUID;
 @SuppressLint("MissingPermission")
 final class MokukuConnection {
     private static final String TAG = "MokukuBluetooth";
+    // Consecutive failed sectors, or refused starts while MOKUKU applies the access code.
+    private static final int DOWNLOAD_RETRY_LIMIT = 3;
+    private static final long SECTOR_TIMEOUT_MILLISECONDS = 3000;
+    private static final long START_RETRY_MILLISECONDS = 300;
     interface Listener { void changed(Snapshot snapshot); }
     private interface Reply { void complete(byte[] value, String error); }
 
@@ -101,18 +107,21 @@ final class MokukuConnection {
         final UUID characteristic;
         final byte[] bytes;
         final int replyId;
+        final boolean withoutResponse;
         final Reply callback;
         boolean written;
         byte[] reply;
-        Request(UUID characteristic, byte[] bytes, int replyId, Reply callback) {
+        Request(UUID characteristic, byte[] bytes, int replyId, boolean withoutResponse, Reply callback) {
             this.characteristic = characteristic;
             this.bytes = bytes;
             this.replyId = replyId;
+            this.withoutResponse = withoutResponse;
             this.callback = callback;
         }
     }
 
     private final Context context;
+    private final SharedPreferences recordingAccessPreferences;
     private final BluetoothAdapter adapter;
     private final HandlerThread thread = new HandlerThread("MokukuBluetooth");
     private final Handler worker;
@@ -129,6 +138,9 @@ final class MokukuConnection {
     private BluetoothGatt gatt;
     private BluetoothGattCharacteristic data;
     private BluetoothGattCharacteristic messages;
+    private BluetoothGattCharacteristic fileCommand;
+    private BluetoothGattCharacteristic fileData;
+    private final ArrayDeque<BluetoothGattCharacteristic> subscriptions = new ArrayDeque<>();
     private boolean ready;
     private int mtu = 23;
     private Request active;
@@ -145,15 +157,28 @@ final class MokukuConnection {
     private BufferedOutputStream output;
     private long received;
     private long total;
-    private long fileKey;
-    private long lastProgressUpdate;
+    private long sectorSize;
+    private int sector;
+    private int nextSequence;
+    private boolean sectorIntact;
+    private final ByteArrayOutputStream sectorBytes = new ByteArrayOutputStream();
+    private int downloadRetries;
+    private String downloadName;
     private long downloadStartedAt;
     private final Runnable scanTimeout = this::stopScanOnWorker;
+    private final Runnable sectorTimeout = this::retrySector;
+    private final Runnable startDownloadAgain = () -> startDownload(operationId);
     private final Runnable connectionTimeout = () -> disconnectOnWorker("Connection timed out. Try again.");
-    private final Runnable requestTimeout = () -> disconnectOnWorker("MOKUKU did not reply. Reconnect and try again; recording queries may exceed the firmware's Bluetooth response limit.");
+    private final Runnable requestTimeout = () -> {
+        if (active != null) Log.w(TAG, "Request timed out: replyId=" + active.replyId
+                + ", writeComplete=" + active.written + ", replyReceived=" + (active.reply != null)
+                + ", offset=" + received + ", mtu=" + mtu);
+        disconnectOnWorker("MOKUKU did not reply. Reconnect and try again; recording queries may exceed the firmware's Bluetooth response limit.");
+    };
 
     MokukuConnection(Context context) {
         this.context = context.getApplicationContext();
+        recordingAccessPreferences = this.context.getSharedPreferences("recording_access", Context.MODE_PRIVATE);
         BluetoothManager manager = (BluetoothManager) context.getSystemService(Context.BLUETOOTH_SERVICE);
         adapter = manager == null ? null : manager.getAdapter();
         thread.start();
@@ -163,6 +188,7 @@ final class MokukuConnection {
             android.content.SharedPreferences preferences = this.context.getSharedPreferences("device", Context.MODE_PRIVATE);
             address = preferences.getString("address", "");
             name = preferences.getString("name", "MOKUKU");
+            recordingAccessCode = recordingAccessPreferences.getString(address, "");
             updateDownloads();
             publish();
         });
@@ -247,6 +273,7 @@ final class MokukuConnection {
             }
             address = device.address;
             name = device.name;
+            recordingAccessCode = recordingAccessPreferences.getString(address, "");
             updateDownloads();
             context.getSharedPreferences("device", Context.MODE_PRIVATE).edit().putString("address", address).putString("name", name).apply();
             mtu = 23;
@@ -264,6 +291,7 @@ final class MokukuConnection {
     void disconnect() { worker.post(() -> disconnectOnWorker("Disconnected. You can reconnect whenever you’re ready.")); }
 
     private void disconnectOnWorker(String reason) {
+        Log.i(TAG, "Disconnect: " + reason);
         ready = false;
         refreshingInformation = false;
         worker.removeCallbacks(connectionTimeout);
@@ -272,6 +300,9 @@ final class MokukuConnection {
         gatt = null;
         data = null;
         messages = null;
+        fileCommand = null;
+        fileData = null;
+        subscriptions.clear();
         if (previous != null) {
             try { previous.disconnect(); } catch (SecurityException ignored) {}
             try { previous.close(); } catch (SecurityException ignored) {}
@@ -283,7 +314,7 @@ final class MokukuConnection {
         information.clear();
         errors.clear();
         recordings.clear();
-        recordingAccessCode = "";
+        recordingAccessCode = recordingAccessPreferences.getString(address, "");
         endOperation(reason);
         for (Request request : failed) request.callback.complete(null, reason);
         report(reason);
@@ -308,6 +339,8 @@ final class MokukuConnection {
                 BluetoothGattService service = connection.getService(MokukuProtocol.SERVICE);
                 data = service == null ? null : service.getCharacteristic(MokukuProtocol.DATA);
                 messages = service == null ? null : service.getCharacteristic(MokukuProtocol.MESSAGE);
+                fileCommand = service == null ? null : service.getCharacteristic(MokukuProtocol.FILE_COMMAND);
+                fileData = service == null ? null : service.getCharacteristic(MokukuProtocol.FILE_DATA);
                 if (status != BluetoothGatt.GATT_SUCCESS || data == null || messages == null) {
                     disconnectOnWorker("This device does not provide the original MOKUKU protocol."); return;
                 }
@@ -328,6 +361,7 @@ final class MokukuConnection {
             worker.post(() -> {
                 if (connection != gatt || !descriptor.getUuid().equals(MokukuProtocol.NOTIFICATIONS)) return;
                 if (status != BluetoothGatt.GATT_SUCCESS) { disconnectOnWorker("Could not subscribe to MOKUKU replies."); return; }
+                if (!subscriptions.isEmpty()) { subscribeNext(); return; }
                 worker.removeCallbacks(connectionTimeout);
                 ready = true;
                 report("Connected. Refreshing device information…");
@@ -352,11 +386,20 @@ final class MokukuConnection {
         }
     };
 
-    @SuppressWarnings("deprecation")
     private void subscribe() {
+        subscriptions.clear();
+        subscriptions.add(data);
+        if (fileCommand != null && fileData != null) { subscriptions.add(fileCommand); subscriptions.add(fileData); }
+        subscribeNext();
+    }
+
+    // Descriptor writes run one at a time; onDescriptorWrite starts the next.
+    @SuppressWarnings("deprecation")
+    private void subscribeNext() {
+        BluetoothGattCharacteristic characteristic = subscriptions.removeFirst();
         try {
-            BluetoothGattDescriptor descriptor = data.getDescriptor(MokukuProtocol.NOTIFICATIONS);
-            if (descriptor == null || !gatt.setCharacteristicNotification(data, true)) {
+            BluetoothGattDescriptor descriptor = characteristic.getDescriptor(MokukuProtocol.NOTIFICATIONS);
+            if (descriptor == null || !gatt.setCharacteristicNotification(characteristic, true)) {
                 disconnectOnWorker("MOKUKU notifications are unavailable."); return;
             }
             boolean started;
@@ -371,20 +414,27 @@ final class MokukuConnection {
     }
 
     private void acceptNotification(BluetoothGatt connection, BluetoothGattCharacteristic characteristic, byte[] value) {
-        if (!characteristic.getUuid().equals(MokukuProtocol.DATA)) return;
+        UUID uuid = characteristic.getUuid();
         worker.post(() -> {
-            if (connection != gatt || active == null || value.length == 0) return;
-            if (MokukuProtocol.unsigned(value[0]) != active.replyId) return;
+            if (connection != gatt || value.length == 0) return;
+            if (uuid.equals(MokukuProtocol.FILE_COMMAND)) { if (output != null) acceptDownloadStart(value); return; }
+            if (uuid.equals(MokukuProtocol.FILE_DATA)) { if (output != null && total > 0) acceptSectorPacket(value); return; }
+            if (!uuid.equals(MokukuProtocol.DATA)) return;
+            if (active == null || MokukuProtocol.unsigned(value[0]) != active.replyId) return;
             active.reply = value;
             completeRequest();
         });
     }
 
     private void request(UUID characteristic, byte[] bytes, int replyId, Reply callback) {
+        request(characteristic, bytes, replyId, false, callback);
+    }
+
+    private void request(UUID characteristic, byte[] bytes, int replyId, boolean withoutResponse, Reply callback) {
         if (!ready) { callback.complete(null, "Connect to MOKUKU first."); return; }
         if (bytes.length > mtu - 3) { callback.complete(null, "Bluetooth packet size is too small for this setting. Reconnect and try again."); return; }
         if (requests.size() >= 32) { callback.complete(null, "Wait for the current requests to finish."); return; }
-        requests.add(new Request(characteristic, bytes, replyId, callback));
+        requests.add(new Request(characteristic, bytes, replyId, withoutResponse, callback));
         pump();
     }
 
@@ -392,14 +442,9 @@ final class MokukuConnection {
     private void pump() {
         if (active != null || !ready || requests.isEmpty()) return;
         active = requests.removeFirst();
-        BluetoothGattCharacteristic characteristic = active.characteristic.equals(MokukuProtocol.DATA) ? data : messages;
-        int writeType = active.replyId == 66
-                && (characteristic.getProperties() & BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE) != 0
+        BluetoothGattCharacteristic characteristic = characteristic(active.characteristic);
+        int writeType = active.withoutResponse
                 ? BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE : BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT;
-        if (active.replyId == 66 && received == 0) {
-            Log.i(TAG, "Download transport: MTU=" + mtu + ", payload=" + MokukuProtocol.unsigned(active.bytes[1])
-                    + ", writeWithoutResponse=" + (writeType == BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE));
-        }
         try {
             boolean started;
             if (Build.VERSION.SDK_INT >= 33) {
@@ -414,6 +459,13 @@ final class MokukuConnection {
         } catch (SecurityException | IllegalStateException exception) {
             disconnectOnWorker("Bluetooth access was lost. Check permissions and reconnect.");
         }
+    }
+
+    private BluetoothGattCharacteristic characteristic(UUID uuid) {
+        if (uuid.equals(MokukuProtocol.DATA)) return data;
+        if (uuid.equals(MokukuProtocol.FILE_COMMAND)) return fileCommand;
+        if (uuid.equals(MokukuProtocol.FILE_DATA)) return fileData;
+        return messages;
     }
 
     private void completeRequest() {
@@ -535,9 +587,20 @@ final class MokukuConnection {
             if (!canStart()) return;
             try {
                 MokukuProtocol.stringMessage(44, code, 255);
+                recordingAccessPreferences.edit().putString(address, code).apply();
                 recordingAccessCode = code;
                 refreshRecordings();
             } catch (IllegalArgumentException exception) { report(exception.getMessage()); }
+        });
+    }
+
+    void forgetRecordingAccessCode() {
+        worker.post(() -> {
+            if (operation != null) { report("Finish or cancel the current operation first."); return; }
+            recordingAccessPreferences.edit().remove(address).apply();
+            recordingAccessCode = "";
+            recordings.clear();
+            report("Saved access code forgotten. Downloaded phone copies are kept.");
         });
     }
 
@@ -654,6 +717,7 @@ final class MokukuConnection {
     void download(String name) {
         worker.post(() -> {
             if (!canStart()) return;
+            if (fileData == null) { report("Update MOKUKU's firmware to download recordings."); return; }
             operation = "Downloading " + name;
             operationCancellable = true;
             received = 0;
@@ -661,54 +725,114 @@ final class MokukuConnection {
             int id = ++operationId;
             setDownloadPriority(true);
             publish();
+            downloadName = name;
             authorize((reply, error) -> {
                 if (id != operationId) return;
                 if (error != null) { endOperation(error); return; }
                 try {
-                    request(MokukuProtocol.MESSAGE, MokukuProtocol.stringMessage(65, MokukuProtocol.recordPath(name), 255), 65, (value, failure) -> {
-                        if (id != operationId) return;
-                        if (failure != null) { endOperation(failure); return; }
-                        try {
-                            long[] opened = MokukuProtocol.openFile(value);
-                            fileKey = opened[0]; total = opened[1];
-                            File directory = recordingDirectory();
-                            if (!directory.isDirectory() && !directory.mkdirs()) throw new IOException("Could not create the phone recording folder.");
-                            if (total > directory.getUsableSpace()) throw new IOException("Not enough free phone storage.");
-                            partial = File.createTempFile("download-", ".partial", directory);
-                            output = new BufferedOutputStream(new FileOutputStream(partial));
-                            downloadStartedAt = android.os.SystemClock.elapsedRealtime();
-                            lastProgressUpdate = downloadStartedAt;
-                            publish();
-                            readChunk(id, name);
-                        } catch (IOException | IllegalArgumentException exception) { endOperation(exception.getMessage()); }
-                    });
-                } catch (IllegalArgumentException exception) { endOperation(exception.getMessage()); }
+                    File directory = recordingDirectory();
+                    if (!directory.isDirectory() && !directory.mkdirs()) throw new IOException("Could not create the phone recording folder.");
+                    partial = File.createTempFile("download-", ".partial", directory);
+                    output = new BufferedOutputStream(new FileOutputStream(partial));
+                } catch (IOException exception) { endOperation(exception.getMessage()); return; }
+                startDownload(id);
             });
         });
     }
 
-    private void readChunk(int id, String name) {
-        request(MokukuProtocol.MESSAGE, MokukuProtocol.readFile(fileKey, received, mtu), 66, (reply, error) -> {
-            if (id != operationId) return;
-            if (error != null) { endOperation(error); return; }
-            try {
-                byte[] chunk = MokukuProtocol.fileChunk(reply, received, total);
-                output.write(chunk);
-                received += chunk.length;
-                if (received == total) {
-                    output.close(); output = null;
-                    File destination = new File(recordingDirectory(), name);
-                    if (!partial.renameTo(destination)) throw new IOException("Could not finish saving the recording.");
-                    partial = null;
-                    downloads.put(name, destination);
-                    endOperation("Downloaded " + name + " to the app. Use Save to phone to choose a location.");
-                } else {
-                    long now = android.os.SystemClock.elapsedRealtime();
-                    if (now - lastProgressUpdate > 200) { lastProgressUpdate = now; publish(); }
-                    readChunk(id, name);
-                }
-            } catch (IOException | IllegalArgumentException exception) { endOperation(exception.getMessage()); }
-        });
+    private void startDownload(int id) {
+        if (id != operationId) return;
+        try {
+            request(MokukuProtocol.FILE_COMMAND, MokukuProtocol.startDownload(MokukuProtocol.recordPath(downloadName)), -1, (reply, error) -> {
+                if (id == operationId && error != null) endOperation(error);
+            });
+            worker.removeCallbacks(sectorTimeout);
+            worker.postDelayed(sectorTimeout, SECTOR_TIMEOUT_MILLISECONDS);
+        } catch (IllegalArgumentException exception) { endOperation(exception.getMessage()); }
+    }
+
+    private void acceptDownloadStart(byte[] frame) {
+        if (total > 0) return;
+        try {
+            long[] started = MokukuProtocol.downloadStarted(frame);
+            if (started == null) return;
+            if (started[0] == 0) throw new IOException("The recording is empty.");
+            if (started[0] > recordingDirectory().getUsableSpace()) throw new IOException("Not enough free phone storage.");
+            total = started[0];
+            sectorSize = started[1];
+            sector = 0;
+            downloadRetries = 0;
+            resetSector();
+            downloadStartedAt = android.os.SystemClock.elapsedRealtime();
+            Log.i(TAG, "Download transport: MTU=" + mtu + ", sector=" + sectorSize);
+            publish();
+            worker.removeCallbacks(sectorTimeout);
+            worker.postDelayed(sectorTimeout, SECTOR_TIMEOUT_MILLISECONDS);
+        } catch (IllegalStateException refused) {
+            // MOKUKU applies the access code on another task, so the first start can race it.
+            worker.removeCallbacks(sectorTimeout);
+            if (++downloadRetries > DOWNLOAD_RETRY_LIMIT) endOperation(refused.getMessage());
+            else worker.postDelayed(startDownloadAgain, START_RETRY_MILLISECONDS);
+        } catch (IOException | IllegalArgumentException exception) { endOperation(exception.getMessage()); }
+    }
+
+    private void resetSector() {
+        sectorBytes.reset();
+        nextSequence = 0;
+        sectorIntact = true;
+    }
+
+    private void acceptSectorPacket(byte[] packet) {
+        if (packet.length < MokukuProtocol.PACKET_HEADER_SIZE) return;
+        int index = MokukuProtocol.unsigned(packet[0]) | MokukuProtocol.unsigned(packet[1]) << 8;
+        int sequence = MokukuProtocol.unsigned(packet[2]);
+        if (index != sector) return;  // left over from a resent sector
+        if (sequence == 0) resetSector();
+        if (sequence != MokukuProtocol.LAST_PACKET) {
+            sectorIntact &= sequence == nextSequence;
+            nextSequence = sequence + 1;
+        }
+        sectorBytes.write(packet, MokukuProtocol.PACKET_HEADER_SIZE, packet.length - MokukuProtocol.PACKET_HEADER_SIZE);
+        worker.removeCallbacks(sectorTimeout);
+        worker.postDelayed(sectorTimeout, SECTOR_TIMEOUT_MILLISECONDS);
+        if (sequence != MokukuProtocol.LAST_PACKET) return;
+        byte[] body = MokukuProtocol.withoutCrc(sectorBytes.toByteArray(), sectorBytes.size());
+        if (!sectorIntact || body == null || body.length != Math.min(sectorSize, total - received)) { retrySector(); return; }
+        resetSector();
+        try {
+            output.write(body);
+            received += body.length;
+            downloadRetries = 0;
+            sector++;
+            acknowledge(sector - 1, MokukuProtocol.SECTOR_OK);
+            if (received < total) { publish(); return; }
+            output.close(); output = null;
+            File destination = new File(recordingDirectory(), downloadName);
+            if (!partial.renameTo(destination)) throw new IOException("Could not finish saving the recording.");
+            partial = null;
+            downloads.put(downloadName, destination);
+            endOperation("Downloaded " + downloadName + " to the app. Use Save to phone to choose a location.");
+        } catch (IOException exception) { endOperation(exception.getMessage()); }
+    }
+
+    // Asks MOKUKU to resend the current sector after a CRC failure, a gap or a stall.
+    private void retrySector() {
+        worker.removeCallbacks(sectorTimeout);
+        if (output == null) return;
+        if (total == 0) { endOperation("MOKUKU did not start the download. Reconnect and try again."); return; }
+        if (++downloadRetries > DOWNLOAD_RETRY_LIMIT) { endOperation("MOKUKU stopped sending recording data. Download again."); return; }
+        Log.w(TAG, "Resending sector " + sector + " at offset " + received + " (attempt " + downloadRetries + ")");
+        resetSector();
+        acknowledge(sector, MokukuProtocol.SECTOR_CRC_ERROR);
+        worker.postDelayed(sectorTimeout, SECTOR_TIMEOUT_MILLISECONDS);
+    }
+
+    // The acknowledgement names the sector MOKUKU sends next.
+    private void acknowledge(int acknowledged, int status) {
+        int id = operationId;
+        boolean withoutResponse = (fileData.getProperties() & BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE) != 0;
+        request(MokukuProtocol.FILE_DATA, MokukuProtocol.acknowledgement(acknowledged, status, sector), -1, withoutResponse,
+                (reply, error) -> { if (id == operationId && error != null) endOperation(error); });
     }
 
     void cancelOperation() {
@@ -732,8 +856,14 @@ final class MokukuConnection {
 
     private void endOperation(String result) {
         ++operationId;
+        if (downloadStartedAt > 0) Log.i(TAG, "Download ended at " + received + "/" + total + " after "
+                + (android.os.SystemClock.elapsedRealtime() - downloadStartedAt) + " ms: " + result);
+        worker.removeCallbacks(sectorTimeout);
+        worker.removeCallbacks(startDownloadAgain);
+        downloadRetries = 0;
         setDownloadPriority(false);
         if (output != null) {
+            if (ready) request(MokukuProtocol.FILE_COMMAND, MokukuProtocol.stopTransfer(), -1, (reply, error) -> {});
             try { output.close(); } catch (IOException ignored) {}
             output = null;
         }

@@ -59,26 +59,26 @@ downloaded phone copies remain available.
 ## Download performance
 
 During a download the app requests Android's high connection priority and restores
-balanced priority when it finishes, fails, or is canceled. Chunk requests use
-write-without-response when the device advertises it; settings and other controls
-keep acknowledged writes. Each chunk still requires a validated file-data reply
-before the next request, and phone file writes are buffered.
+balanced priority when it finishes, fails, or is canceled. It downloads over the
+File Command and File Data characteristics: MOKUKU streams CRC-checked sectors of
+up to 16 KB and waits for the app to acknowledge each one. The app asks for a
+sector again after a CRC failure, a missing packet, or 3 s without data, and stops
+after three failed attempts. Downloads need firmware with this sector transfer.
 
-The app requests MTU 517; each file reply carries at most 255 bytes, or MTU minus
-nine when smaller. A default MTU of 23 allows only 14 file bytes per round trip.
-Phone connection intervals, negotiated MTU, and radio conditions affect speed;
-high priority is a request to the Bluetooth stack, not a guaranteed transfer rate.
-For a slow transfer, capture `adb logcat -s MokukuBluetooth:I` while reconnecting
-and downloading. It reports the negotiated MTU, requested chunk size, write mode,
-and whether Android accepted the priority request, without logging access codes.
+The app requests MTU 517. For a slow transfer, capture
+`adb logcat -s MokukuBluetooth:I`. It reports the negotiated MTU, sector size,
+resent sectors, and the final result, without logging access codes.
 
 ## Recording access
 
 Connect, open **Data Collection → Enter access code**, and choose **Use code** to
-load recordings. Input is masked with an optional reveal control. The code stays
-in memory for the current connection, including screen rotation, and is cleared on
-disconnect or app exit. It is not saved on the phone or compiled into the APK.
-Use **Change access code** to retry. The firmware does not acknowledge code
+load recordings. Input is masked with an optional reveal control. The app saves
+the code privately on this phone for that device's BLE address and reuses it after
+reconnecting or restarting the app. Codes are excluded from backup/device transfer
+and are not compiled into the APK.
+Use **Change access code** to replace it, or **Forget access code** to remove the
+saved code, including while disconnected. Forgetting keeps downloaded phone copies.
+The firmware does not acknowledge code
 acceptance; a wrong code can make file requests time out. No Actions secret or
 special build configuration is needed.
 
