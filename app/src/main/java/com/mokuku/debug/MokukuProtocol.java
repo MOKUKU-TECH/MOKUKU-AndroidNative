@@ -315,6 +315,14 @@ final class MokukuProtocol {
         return packets;
     }
 
+    // The data packet's first five bytes; the original firmware would also set its clock from a longer one.
+    static byte[] vehicleData(int speed, int rpm, int fuel) {
+        if (speed < 0 || speed > 255) throw new IllegalArgumentException("Enter a speed from 0 to 255 km/h.");
+        if (rpm < 0 || rpm > 16383) throw new IllegalArgumentException("Enter an RPM from 0 to 16383.");
+        if (fuel < 0 || fuel > 100) throw new IllegalArgumentException("Enter fuel from 0 to 100%.");
+        return ByteBuffer.allocate(5).put((byte) 1).put((byte) speed).putShort((short) (rpm * 4)).put((byte) fuel).array();
+    }
+
     static byte[] dateTime(int year, int month, int day, int hour, int minute) {
         Calendar calendar = Calendar.getInstance(TimeZone.getTimeZone("UTC"));
         calendar.clear();

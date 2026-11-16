@@ -58,6 +58,9 @@ public final class MainActivity extends Activity {
         String route = "home";
         String wifiName = "";
         String remoteUrl = "";
+        String speed = "";
+        String rpm = "";
+        String fuel = "";
         // Recording to download once Android 9 or older grants storage access.
         String pendingDownload;
         final Map<String, Integer> scroll = new HashMap<>();
@@ -78,6 +81,9 @@ public final class MainActivity extends Activity {
     private EditText wifiName;
     private EditText wifiPassword;
     private EditText remoteUrl;
+    private EditText speed;
+    private EditText rpm;
+    private EditText fuel;
     private TextView progressText;
     private ProgressBar progress;
     // MOKUKU II's firmware upload progress on the Updates page, shown while it runs.
@@ -152,6 +158,11 @@ public final class MainActivity extends Activity {
     private void captureDrafts() {
         if (wifiName != null) session.wifiName = wifiName.getText().toString();
         if (remoteUrl != null) session.remoteUrl = remoteUrl.getText().toString();
+        if (speed != null) {
+            session.speed = speed.getText().toString();
+            session.rpm = rpm.getText().toString();
+            session.fuel = fuel.getText().toString();
+        }
     }
 
     private void navigate(String route) {
@@ -197,6 +208,7 @@ public final class MainActivity extends Activity {
         content.removeAllViews(); header.removeAllViews(); navigation.removeAllViews();
         deviceControls.clear();
         wifiName = null; wifiPassword = null; remoteUrl = null;
+        speed = null; rpm = null; fuel = null;
         firmwareVersion = null; memeVersion = null;
         progress = null; progressText = null; firmwareProgress = null;
         boolean subpage = "updates".equals(session.route) || "debug".equals(session.route) || "simulation".equals(session.route);
@@ -553,12 +565,35 @@ public final class MainActivity extends Activity {
             propertyButton(card, "Next right panel", MokukuProtocol.PROPERTY_PANEL_ACTION, 2);
             propertyButton(card, "Switch meme/data mode", MokukuProtocol.PROPERTY_PANEL_ACTION, 3);
             card.addView(ui.muted("From meme mode, a next-panel tap returns both eyes to data panels."));
-            return;
+        } else {
+            commandButton(card, "Left click", 43);
+            commandButton(card, "Right click", 53);
+            commandButton(card, "Change eye mode", 10);
+            card.addView(ui.muted("Check MOKUKU’s display for the current mode."));
         }
-        commandButton(card, "Left click", 43);
-        commandButton(card, "Right click", 53);
-        commandButton(card, "Change eye mode", 10);
-        card.addView(ui.muted("Check MOKUKU’s display for the current mode."));
+        vehicleData();
+    }
+
+    private void vehicleData() {
+        LinearLayout card = ui.card(content);
+        card.addView(ui.text("Vehicle data", 18, R.color.text_primary));
+        card.addView(ui.muted("Shown on the speed, RPM, and fuel panels. OBD or GPS data can replace it."));
+        speed = field(card, "Speed (km/h, 0–255)", "0", InputType.TYPE_CLASS_NUMBER);
+        speed.setText(session.speed);
+        rpm = field(card, "RPM (0–16383)", "0", InputType.TYPE_CLASS_NUMBER);
+        rpm.setText(session.rpm);
+        fuel = field(card, "Fuel (%, 0–100)", "0", InputType.TYPE_CLASS_NUMBER);
+        fuel.setText(session.fuel);
+        deviceButton(card, "Send vehicle data", true, false, () -> {
+            try {
+                session.connection.sendVehicleData(number(speed), number(rpm), number(fuel));
+            } catch (NumberFormatException exception) { feedback.setText("Enter whole numbers for speed, RPM, and fuel."); }
+        });
+    }
+
+    private static int number(EditText field) {
+        String text = field.getText().toString().trim();
+        return text.isEmpty() ? 0 : Integer.parseInt(text);
     }
 
     private void commandButton(LinearLayout parent, String label, int command) {
