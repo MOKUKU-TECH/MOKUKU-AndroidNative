@@ -29,6 +29,11 @@ final class MokukuProtocol {
         return name != null && name.startsWith("mokuku_");
     }
 
+    // The connected left eye relays these to the right eye over UART and keeps Bluetooth up.
+    static boolean isRightEyeUpdate(int command) {
+        return command == 67 || command == 69 || command == 71;
+    }
+
     static boolean isMokukuII(String name) {
         return name != null && name.startsWith("mokukuii");
     }
