@@ -177,7 +177,8 @@ write the APK to the same `output/` directory on the host.
 GitHub Actions runs `scripts/build.sh` for pushes to `main`/`master` and pull requests that
 change `app/`, the Gradle build files/wrapper, the build helper, or the APK workflow
 itself. Markdown and changes confined to documentation or `design/` do not trigger
-an APK build. Manual runs remain available. Successful builds upload
+an APK build. Manual runs remain available. Robolectric's Android SDK jars are cached
+between runs, keyed on `app/build.gradle`. Successful builds upload
 `mokuku-debug.apk` as a workflow artifact. The shared
 [path filter](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#onpushpull_requestpull_request_targetpathspaths-ignore)
 keeps push and PR triggers consistent.
