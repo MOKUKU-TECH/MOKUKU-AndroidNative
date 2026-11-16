@@ -26,6 +26,7 @@ clock-only time sync, as detailed below.
 | Voice OTA | `01 48` English (72), `01 49` Mandarin (73) | Both eyes' wake-word assets and right-eye model |
 | Meme update | `01 45` right (69), `01 44` left (68) | Wi-Fi download on device; no BLE progress reply |
 | Left / right click | `01 2B` (43) / `01 35` (53) | Direct-command acceptance reply |
+| Vehicle data | Transfer Data `01 speed rpm×4_BE16 fuel` | No reply. The app sends 5 bytes: the 11-byte form also sets the clock and debug date |
 | Eye mode change | `01 0A` (10) | Toggle; current mode is not queried |
 | Enable / disable OBD | `01 22` (34) / `01 23` (35) | Commands only; no state readback |
 | Enable debug log | `01 04` | Enable only; no corresponding disable command |
@@ -98,6 +99,7 @@ same sector transfer as above.
 | Wi-Fi name / password / remote address | Set 3 / 4 / 5, UTF-8 text | 1–64 bytes |
 | Enable / disable OBD | Set 6 `01` / `00` | App reads property 6 back |
 | Next left / right panel, meme/data mode | Set 15 `01` / `02` / `03` | Simulation |
+| Vehicle data | Data `01 speed rpm×4_BE16 fuel` | No reply; same 5 bytes as the original |
 | Voice command language | Set 9 `en` / `cn` | Restarts when the language changes |
 | Rollback | Set 200, no value | Restarts; result 4 when the other slot is not older |
 | List recordings | Get 10, first index LE16, `/sdcard/record` | One notification of names per request; repeat from the next index until empty |

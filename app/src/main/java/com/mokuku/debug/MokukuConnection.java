@@ -657,6 +657,16 @@ final class MokukuConnection {
                 : MokukuProtocol.stringMessage(id, value, maximumBytes);
     }
 
+    void sendVehicleData(int speed, int rpm, int fuel) {
+        worker.post(() -> {
+            if (!canStart()) return;
+            try {
+                request(mokukuII ? MokukuProtocol.MESSAGE : MokukuProtocol.DATA, MokukuProtocol.vehicleData(speed, rpm, fuel), -1,
+                        (reply, error) -> report(error == null ? "Vehicle data sent: " + speed + " km/h, " + rpm + " RPM, " + fuel + "% fuel." : error));
+            } catch (IllegalArgumentException exception) { report(exception.getMessage()); }
+        });
+    }
+
     void setDateTime(int year, int month, int day, int hour, int minute) {
         worker.post(() -> {
             if (!canStart()) return;

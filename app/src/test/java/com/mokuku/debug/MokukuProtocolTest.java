@@ -111,6 +111,13 @@ public class MokukuProtocolTest {
         assertArrayEquals(new byte[] {(byte) 200, 0, (byte) 0xe8, 3, 0, 0}, start);
     }
 
+    @Test public void encodesVehicleDataWithRpmTimesFourBigEndian() {
+        assertArrayEquals(new byte[] {1, 120, 0x2e, (byte) 0xe0, 75}, MokukuProtocol.vehicleData(120, 3000, 75));
+        assertThrows(IllegalArgumentException.class, () -> MokukuProtocol.vehicleData(256, 0, 0));
+        assertThrows(IllegalArgumentException.class, () -> MokukuProtocol.vehicleData(0, 16384, 0));
+        assertThrows(IllegalArgumentException.class, () -> MokukuProtocol.vehicleData(0, 0, 101));
+    }
+
     @Test public void encodesSelectedWallClockWithoutVehicleData() {
         byte[] packet = MokukuProtocol.dateTime(2026, 10, 13, 9, 41);
         assertEquals(11, packet.length);

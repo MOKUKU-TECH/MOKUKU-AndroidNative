@@ -27,7 +27,8 @@ see [MOKUKU II](#mokuku-ii).
 - **Home:** find/connect to a `mokuku_` device, then query both eyes' firmware
   versions, SD free/total space, voice model, and MAC address. Allow Nearby devices
   permission on Android 12+, or location permission/services on Android 6–11.
-- **Simulation:** send left/right clicks or toggle eye mode from Home.
+- **Simulation:** send left/right clicks or toggle eye mode from Home, and set the
+  speed, RPM, and fuel shown on the panels. OBD or GPS data can replace them.
 - **Tools → Updates:** save Wi-Fi and the remote URL independently; request
   firmware OTA, voice-model OTA, meme updates, or per-eye rollback. Complete the
   right-eye update before confirming a left-eye update. Reconnect after the device
@@ -176,7 +177,8 @@ write the APK to the same `output/` directory on the host.
 GitHub Actions runs `scripts/build.sh` for pushes to `main`/`master` and pull requests that
 change `app/`, the Gradle build files/wrapper, the build helper, or the APK workflow
 itself. Markdown and changes confined to documentation or `design/` do not trigger
-an APK build. Manual runs remain available. Successful builds upload
+an APK build. Manual runs remain available. Robolectric's Android SDK jars are cached
+between runs, keyed on `app/build.gradle`. Successful builds upload
 `mokuku-debug.apk` as a workflow artifact. The shared
 [path filter](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#onpushpull_requestpull_request_targetpathspaths-ignore)
 keeps push and PR triggers consistent.
