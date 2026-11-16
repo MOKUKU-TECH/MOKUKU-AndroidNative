@@ -34,6 +34,14 @@ clock-only time sync, as detailed below.
 | Open download | `41 len /sd/record/name` (65) | 10 bytes: ID, success, file key LE32, size LE32 |
 | Read download chunk | `42 requested_length key_LE32 offset_LE32` (66) | ID, length, offset LE32, bytes; validate offset and continue to advertised size |
 
+File replies are limited to `min(requested_length, negotiated_MTU - 9)` bytes,
+with a one-byte length limiting requests to 255. The firmware accepts writes both
+with and without ATT response on Transfer Message. Android uses
+write-without-response only for chunk requests when advertised, while still
+waiting for local write completion and the validated notification before the next
+request. Downloads request high connection priority and restore balanced priority
+on completion, failure, or cancellation; throughput needs phone verification.
+
 Hex byte values are shown without a prefix; parenthesized command numbers are
 decimal. Length-prefixed paths and strings count UTF-8 bytes, not characters.
 Firmware handlers use strings as C strings in several places; the implementation

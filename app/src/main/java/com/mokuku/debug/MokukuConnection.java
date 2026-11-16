@@ -22,7 +22,9 @@ import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
 import android.os.ParcelUuid;
+import android.util.Log;
 
+import java.io.BufferedOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -37,6 +39,7 @@ import java.util.UUID;
 
 @SuppressLint("MissingPermission")
 final class MokukuConnection {
+    private static final String TAG = "MokukuBluetooth";
     interface Listener { void changed(Snapshot snapshot); }
     private interface Reply { void complete(byte[] value, String error); }
 
@@ -136,9 +139,10 @@ final class MokukuConnection {
     private String operation;
     private boolean operationCancellable;
     private boolean refreshingInformation;
+    private boolean downloadPriorityRequested;
     private int operationId;
     private File partial;
-    private FileOutputStream output;
+    private BufferedOutputStream output;
     private long received;
     private long total;
     private long fileKey;
@@ -316,6 +320,7 @@ final class MokukuConnection {
             worker.post(() -> {
                 if (connection != gatt || ready) return;
                 if (status == BluetoothGatt.GATT_SUCCESS) mtu = Math.max(23, value);
+                Log.i(TAG, "Negotiated MTU: " + mtu + " (status " + status + ")");
                 subscribe();
             });
         }
@@ -388,12 +393,19 @@ final class MokukuConnection {
         if (active != null || !ready || requests.isEmpty()) return;
         active = requests.removeFirst();
         BluetoothGattCharacteristic characteristic = active.characteristic.equals(MokukuProtocol.DATA) ? data : messages;
+        int writeType = active.replyId == 66
+                && (characteristic.getProperties() & BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE) != 0
+                ? BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE : BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT;
+        if (active.replyId == 66 && received == 0) {
+            Log.i(TAG, "Download transport: MTU=" + mtu + ", payload=" + MokukuProtocol.unsigned(active.bytes[1])
+                    + ", writeWithoutResponse=" + (writeType == BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE));
+        }
         try {
             boolean started;
             if (Build.VERSION.SDK_INT >= 33) {
-                started = gatt.writeCharacteristic(characteristic, active.bytes, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) == BluetoothStatusCodes.SUCCESS;
+                started = gatt.writeCharacteristic(characteristic, active.bytes, writeType) == BluetoothStatusCodes.SUCCESS;
             } else {
-                characteristic.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
+                characteristic.setWriteType(writeType);
                 characteristic.setValue(active.bytes);
                 started = gatt.writeCharacteristic(characteristic);
             }
@@ -647,6 +659,7 @@ final class MokukuConnection {
             received = 0;
             total = 0;
             int id = ++operationId;
+            setDownloadPriority(true);
             publish();
             authorize((reply, error) -> {
                 if (id != operationId) return;
@@ -662,7 +675,7 @@ final class MokukuConnection {
                             if (!directory.isDirectory() && !directory.mkdirs()) throw new IOException("Could not create the phone recording folder.");
                             if (total > directory.getUsableSpace()) throw new IOException("Not enough free phone storage.");
                             partial = File.createTempFile("download-", ".partial", directory);
-                            output = new FileOutputStream(partial);
+                            output = new BufferedOutputStream(new FileOutputStream(partial));
                             downloadStartedAt = android.os.SystemClock.elapsedRealtime();
                             lastProgressUpdate = downloadStartedAt;
                             publish();
@@ -704,8 +717,22 @@ final class MokukuConnection {
         });
     }
 
+    private void setDownloadPriority(boolean high) {
+        if (downloadPriorityRequested == high) return;
+        downloadPriorityRequested = high;
+        if (gatt == null) return;
+        try {
+            boolean accepted = gatt.requestConnectionPriority(high
+                    ? BluetoothGatt.CONNECTION_PRIORITY_HIGH : BluetoothGatt.CONNECTION_PRIORITY_BALANCED);
+            Log.i(TAG, "Connection priority request: " + (high ? "high" : "balanced") + ", accepted=" + accepted);
+        } catch (SecurityException exception) {
+            Log.w(TAG, "Bluetooth permission unavailable for connection priority request.");
+        }
+    }
+
     private void endOperation(String result) {
         ++operationId;
+        setDownloadPriority(false);
         if (output != null) {
             try { output.close(); } catch (IOException ignored) {}
             output = null;

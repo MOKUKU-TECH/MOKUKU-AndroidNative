@@ -56,6 +56,22 @@ validation is still required for BLE, date/time, OTA, and SD operations.
 Device information and the returned recording list are cleared on disconnect;
 downloaded phone copies remain available.
 
+## Download performance
+
+During a download the app requests Android's high connection priority and restores
+balanced priority when it finishes, fails, or is canceled. Chunk requests use
+write-without-response when the device advertises it; settings and other controls
+keep acknowledged writes. Each chunk still requires a validated file-data reply
+before the next request, and phone file writes are buffered.
+
+The app requests MTU 517; each file reply carries at most 255 bytes, or MTU minus
+nine when smaller. A default MTU of 23 allows only 14 file bytes per round trip.
+Phone connection intervals, negotiated MTU, and radio conditions affect speed;
+high priority is a request to the Bluetooth stack, not a guaranteed transfer rate.
+For a slow transfer, capture `adb logcat -s MokukuBluetooth:I` while reconnecting
+and downloading. It reports the negotiated MTU, requested chunk size, write mode,
+and whether Android accepted the priority request, without logging access codes.
+
 ## Recording access
 
 Connect, open **Data Collection → Enter access code**, and choose **Use code** to
