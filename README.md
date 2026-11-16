@@ -1,7 +1,7 @@
 # MOKUKU Android Native
 
-A calm, dark Android companion for the original two-eye ESP32-S3 MOKUKU. Connect
-over Bluetooth LE to inspect device information, download and manage recordings,
+A calm, dark Android companion for the original two-eye ESP32-S3 MOKUKU and the
+single-ESP32-S31 MOKUKU II. Connect over Bluetooth LE to inspect device information, download and manage recordings,
 try eye interactions, and send update or debug commands.
 
 Four tabs keep the app easy to explore: **Home**, **Data Collection**, **Trips**
@@ -18,7 +18,9 @@ connection. See [Tools](design/previews/native-tools.png),
 [access-code dialog](design/previews/native-access-code.png) for more screens.
 
 The app uses native Java/XML and the Gradle structure of `MobiliAndroidHUD`.
-It supports the original MOKUKU only.
+It picks the protocol from the advertised name: `mokuku_*` is the original MOKUKU,
+`mokukuii*` is MOKUKU II. Each screen shows only the actions that device supports;
+see [MOKUKU II](#mokuku-ii).
 
 ## Use the app
 
@@ -84,6 +86,30 @@ The firmware does not acknowledge code
 acceptance; a wrong code can make file requests time out. No Actions secret or
 special build configuration is needed.
 
+## MOKUKU II
+
+MOKUKU II uses the set/get protocol in MobiliMOKUKU's `doc/MOKUKU_II_BLE_CONTROL.md`.
+Compared with the original MOKUKU:
+
+- **Home:** one firmware version; voice model shows the wake word and command language.
+- **Simulation:** next left/right panel and meme/data mode switch.
+- **Updates:** Wi-Fi and remote address come last and are limited to 64 bytes each. **Choose
+  firmware image** sends a MOKUKU II app image (`IDF_MOKUKU_II_prototype.bin`) over
+  BLE; MOKUKU II checks it and restarts into it, and canceling restarts it into its
+  current firmware. The firmware card lists both OTA slots. Voice commands switch
+  between English and Mandarin, restarting MOKUKU II when the language changes.
+  **Roll back firmware** restarts into the other slot when it is older. There are no
+  meme updates.
+- **Debug:** OBD on/off with its current state. Debug log, date/time, and
+  recording start/stop are not on BLE; start and stop recordings by voice.
+- **Data Collection:** no access code. The list is complete (paged), and
+  **Clear all recordings** deletes in one request, refused while recording. There is
+  no per-file delete.
+
+The app sends a version query after 10 s without other writes, because MOKUKU II
+disconnects a host idle for 30 s. Replies longer than one notification are not read
+back; the app requests MTU 517 so they fit. Hardware verification is pending.
+
 ## App design
 
 The [first design proposal](design/README.md) covers the original two-eye MOKUKU:
@@ -141,7 +167,7 @@ write the APK to the same `output/` directory on the host.
 | `app/` | Native Android application: manifest, Java activity, XML resources. |
 | `app/src/main/java/com/mokuku/debug/` | Native UI (`MainActivity`, `Ui`), serialized BLE session/file operations (`MokukuConnection`), and byte framing/validation (`MokukuProtocol`). |
 | `app/src/test/` | Protocol fixtures and native navigation/lifecycle checks with Robolectric. |
-| `design/` | Visual style, screen flows, original-MOKUKU protocol map, and interactive prototype. |
+| `design/` | Visual style, screen flows, protocol map, and interactive prototype. |
 | `gradle/`, `gradlew`, `gradlew.bat` | Gradle wrapper for Linux, macOS, and Windows. |
 | `scripts/build.sh` | Build, test, lint, export, and optionally install the debug APK. |
 | `artifacts/docker/dev.dockerfile` | Android build environment. |
@@ -155,5 +181,5 @@ an APK build. Manual runs remain available. Successful builds upload
 [path filter](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#onpushpull_requestpull_request_targetpathspaths-ignore)
 keeps push and PR triggers consistent.
 
-The app targets the original MOKUKU. See `doc/BLE_CONTROL.md` in the parent
+See `doc/BLE_CONTROL.md` and `doc/MOKUKU_II_BLE_CONTROL.md` in the parent
 `MobiliMOKUKU` repository and the checked [protocol map](design/PROTOCOL_MAP.md).

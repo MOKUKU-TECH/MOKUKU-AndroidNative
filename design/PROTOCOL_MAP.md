@@ -1,4 +1,6 @@
-# Original MOKUKU protocol map
+# Protocol map
+
+## Original MOKUKU (`mokuku_*`)
 
 Scope: two ESP32-S3 eyes. All control/file writes use Transfer Message
 `d222e154-1a80-4e71-9a63-2aa2c0ce0a8c`. Subscribe to Transfer Data
@@ -80,3 +82,30 @@ The same handler returns an empty successful reply if opening the directory fail
 so **No recordings returned after clearing** is the strongest supported completion
 message; an empty reply does not prove every device file was deleted.
 Large directory/notification handling needs hardware verification before shipping.
+
+## MOKUKU II (`mokukuii*`)
+
+Source of truth: parent `doc/MOKUKU_II_BLE_CONTROL.md`,
+`IDF_MOKUKU_II_prototype/main/bluetooth/host_server.c`, and
+`MOKUKU-BleControl/monitor_app_II/`. Every message goes to Transfer Message, which
+also notifies replies: set is `02 property value`, get `03 property request`; replies
+are `type property result value`, result 0 OK. File Command and File Data carry the
+same sector transfer as above.
+
+| Screen / action | Request | Reply / UI constraint |
+|---|---|---|
+| Version / MAC / OBD / SD / wake word / language / firmware slots | Get 1 / 2 / 6 / 7 / 8 / 9 / 16 | SD is total MB, free MB (LE32 each); MAC 6 bytes; language `cn` or `en` |
+| Wi-Fi name / password / remote address | Set 3 / 4 / 5, UTF-8 text | 1–64 bytes |
+| Enable / disable OBD | Set 6 `01` / `00` | App reads property 6 back |
+| Next left / right panel, meme/data mode | Set 15 `01` / `02` / `03` | Simulation |
+| Voice command language | Set 9 `en` / `cn` | Restarts when the language changes |
+| Rollback | Set 200, no value | Restarts; result 4 when the other slot is not older |
+| List recordings | Get 10, first index LE16, `/sdcard/record` | One notification of names per request; repeat from the next index until empty |
+| Clear all recordings | Set 13, no value | Result 4 while recording; no per-file delete |
+| Download recording | File Command start `02 00`, `/sdcard/record/name` | No access code |
+| Firmware update | File Command start `C8 00`, size LE32 | Reply: sector size LE32, packet size LE16; app sends each sector's packets on File Data and waits for its acknowledgement; MOKUKU II restarts after the last |
+
+MOKUKU II has no debug-log, date/time, recording start/stop, or meme-update
+messages. It disconnects a host that writes nothing for 30 s, so the app sends get 1
+after 10 s of silence. A reply longer than MTU − 3 is not notified; the app relies on
+MTU 517 rather than reading Transfer Message back.

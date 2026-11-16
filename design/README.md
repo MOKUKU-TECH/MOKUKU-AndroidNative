@@ -2,8 +2,9 @@
 
 PR #1 establishes the visual style and screen flows for the original two-eye
 ESP32-S3 MOKUKU. It contains an interactive browser prototype with sample data.
-The native Android app now implements these flows with the original device protocol;
-the browser prototype remains a sample-data design reference.
+The native Android app implements these flows for the original MOKUKU and, where
+MOKUKU II supports them, for MOKUKU II (see the root README); the browser prototype
+remains a sample-data design reference for the original MOKUKU.
 
 Open `index.html` directly in a browser; no server, dependencies, or internet access
 are needed. The desktop controls jump between screens and connection states.
@@ -80,8 +81,8 @@ Start disconnected with a welcoming device card and one primary action: **Find
 MOKUKU**. Show Bluetooth-off, permission-needed, scanning, empty-result, and
 connection-failed states in this area with a relevant retry action. Do not request
 permissions until the user starts discovery. Show device name, MAC address, and
-signal strength in scan results; select a device to connect. Only original MOKUKU
-devices are eligible; the implementation must exclude MOKUKU II advertisements.
+signal strength in scan results; select a device to connect. Original MOKUKU
+(`mokuku_*`) and MOKUKU II (`mokukuii*`) devices are eligible; the name selects the protocol.
 
 On connection, replace the discovery card with the device name and **Connected**
 status. Query information automatically and provide **Refresh**. Show placeholders

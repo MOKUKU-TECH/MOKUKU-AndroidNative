@@ -51,6 +51,7 @@ public final class MainActivity extends Activity {
     private static final int BLUETOOTH_PERMISSION = 10;
     private static final int ENABLE_BLUETOOTH = 11;
     private static final int STORAGE_PERMISSION = 12;
+    private static final int FIRMWARE_IMAGE = 13;
 
     private static final class Session {
         MokukuConnection connection;
@@ -79,6 +80,8 @@ public final class MainActivity extends Activity {
     private EditText remoteUrl;
     private TextView progressText;
     private ProgressBar progress;
+    // MOKUKU II's firmware upload progress on the Updates page, shown while it runs.
+    private View firmwareProgress;
     private AlertDialog discovery;
     private AlertDialog recordingAccess;
     private LinearLayout discoveryResults;
@@ -157,8 +160,10 @@ public final class MainActivity extends Activity {
         ((InputMethodManager) getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(content.getWindowToken(), 0);
         session.route = route;
         render();
-        if ("records".equals(route) && snapshot.connected && snapshot.hasRecordingAccessCode && !snapshot.busy) session.connection.refreshRecordings();
+        if ("records".equals(route) && snapshot.connected && canListRecordings() && !snapshot.busy) session.connection.refreshRecordings();
     }
+
+    private boolean canListRecordings() { return snapshot.mokukuII || snapshot.hasRecordingAccessCode; }
 
     private void changed(MokukuConnection.Snapshot update) {
         MokukuConnection.Snapshot previous = snapshot;
@@ -173,7 +178,7 @@ public final class MainActivity extends Activity {
             captureDrafts();
             session.scroll.put(session.route, scroll.getScrollY());
             render();
-        } else if (("home".equals(session.route) || "tools".equals(session.route))
+        } else if (("home".equals(session.route) || "tools".equals(session.route) || "debug".equals(session.route))
                 && (!previous.information.equals(update.information) || !previous.errors.equals(update.errors)
                 || previous.busy != update.busy || !previous.name.equals(update.name))) {
             session.scroll.put(session.route, scroll.getScrollY());
@@ -183,7 +188,7 @@ public final class MainActivity extends Activity {
                     && update.operation.startsWith("Downloading ") && progress != null;
             if (sameTransfer) updateProgress();
             else { session.scroll.put(session.route, scroll.getScrollY()); render(); }
-        }
+        } else updateProgress();
         updateVersions();
         updateControls();
     }
@@ -193,7 +198,7 @@ public final class MainActivity extends Activity {
         deviceControls.clear();
         wifiName = null; wifiPassword = null; remoteUrl = null;
         firmwareVersion = null; memeVersion = null;
-        progress = null; progressText = null;
+        progress = null; progressText = null; firmwareProgress = null;
         boolean subpage = "updates".equals(session.route) || "debug".equals(session.route) || "simulation".equals(session.route);
         if (subpage) {
             Button back = ui.button("‹", false, false);
@@ -319,12 +324,14 @@ public final class MainActivity extends Activity {
         });
         ui.fullButton(device, connect);
         section("Device overview");
-        String[] versions = information(3).split("/", -1);
         LinearLayout firstRow = overviewRow();
+        // MOKUKU II reports one version; the original reports left/right.
+        String[] versions = information(3).split("/", -1);
         overview(overviewColumn(firstRow, true), "Software", versions.length == 2 ? "Left · INS\n" + versions[0] + "\nRight · AI\n" + versions[1] : information(3), 3);
         overview(overviewColumn(firstRow, false), "SD card", storageText(), 61);
         LinearLayout secondRow = overviewRow();
-        overview(overviewColumn(secondRow, true), "Voice model", information(57), 57);
+        String language = snapshot.information.get(MokukuProtocol.PROPERTY_LANGUAGE);
+        overview(overviewColumn(secondRow, true), "Voice model", information(57) + (language == null ? "" : " · " + language), 57);
         LinearLayout mac = overview(overviewColumn(secondRow, false), "MAC address", information(4), 4);
         if (snapshot.information.containsKey(4)) {
             Button copy = ui.button("Copy address", false, false);
@@ -336,7 +343,7 @@ public final class MainActivity extends Activity {
         }
         deviceButton(content, "Refresh device information", false, false, session.connection::refreshInformation);
         section("A little interaction");
-        shortcut("Simulation", "Left/right clicks and eye mode", R.drawable.ic_eyes, "simulation");
+        shortcut("Simulation", snapshot.mokukuII ? "Next panels and meme/data mode" : "Left/right clicks and eye mode", R.drawable.ic_eyes, "simulation");
     }
 
     private String information(int id) {
@@ -384,8 +391,8 @@ public final class MainActivity extends Activity {
 
     private void tools() {
         intro("Your device, your way.", "A few useful things, whenever you need them.");
-        shortcut("Updates", "Wi-Fi, remote URL, firmware, voice & memes", R.drawable.ic_update, "updates");
-        shortcut("Debug", "OBD, logs, date & recording", R.drawable.ic_debug, "debug");
+        shortcut("Updates", snapshot.mokukuII ? "Wi-Fi, remote URL, firmware & voice" : "Wi-Fi, remote URL, firmware, voice & memes", R.drawable.ic_update, "updates");
+        shortcut("Debug", snapshot.mokukuII ? "OBD & recordings" : "OBD, logs, date & recording", R.drawable.ic_debug, "debug");
     }
 
     private EditText field(LinearLayout parent, String label, String hint, int type) {
@@ -414,31 +421,9 @@ public final class MainActivity extends Activity {
 
     private void updates() {
         intro("Keep the good going.", "A fresh update for your little companion.");
-        LinearLayout wifi = ui.card(content);
-        wifi.addView(ui.text("Wi-Fi", 18, R.color.text_primary));
-        wifi.addView(ui.muted("MOKUKU downloads updates over Wi-Fi."));
-        wifiName = field(wifi, "Wi-Fi name", "Enter network name", InputType.TYPE_CLASS_TEXT);
-        wifiName.setText(session.wifiName);
-        wifiPassword = passwordField(wifi, "Wi-Fi password", "Enter network password");
-        Button reveal = ui.button("Show password", false, false);
-        reveal.setOnClickListener(view -> {
-            boolean hidden = wifiPassword.getTransformationMethod() != null;
-            wifiPassword.setTransformationMethod(hidden ? null : android.text.method.PasswordTransformationMethod.getInstance());
-            reveal.setText(hidden ? "Hide password" : "Show password");
-            wifiPassword.setSelection(wifiPassword.length());
-        });
-        deviceControls.add(reveal);
-        ui.fullButton(wifi, reveal);
-        deviceButton(wifi, "Save Wi-Fi", true, false, () -> {
-            session.connection.saveWifi(wifiName.getText().toString(), wifiPassword.getText().toString());
-            wifiPassword.setText("");
-        });
-        LinearLayout remote = ui.card(content);
-        remote.addView(ui.text("Remote URL", 18, R.color.text_primary));
-        remote.addView(ui.muted("Choose where updates come from."));
-        remoteUrl = field(remote, "Remote base URL", "https://updates.example.com/mokuku/", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        remoteUrl.setText(session.remoteUrl);
-        deviceButton(remote, "Save remote URL", true, false, () -> session.connection.saveUrl(remoteUrl.getText().toString().trim()));
+        // MOKUKU II updates over BLE, so its Wi-Fi and remote URL settings go last.
+        if (snapshot.mokukuII) { mokukuIIUpdates(); updateSources(); return; }
+        updateSources();
         LinearLayout firmware = ui.card(content);
         firmware.addView(ui.text("Firmware OTA", 18, R.color.text_primary));
         firmwareVersion = ui.muted("");
@@ -465,7 +450,75 @@ public final class MainActivity extends Activity {
         updateVersions();
     }
 
+    private void updateSources() {
+        LinearLayout wifi = ui.card(content);
+        wifi.addView(ui.text("Wi-Fi", 18, R.color.text_primary));
+        wifi.addView(ui.muted("MOKUKU downloads updates over Wi-Fi."));
+        wifiName = field(wifi, "Wi-Fi name", "Enter network name", InputType.TYPE_CLASS_TEXT);
+        wifiName.setText(session.wifiName);
+        wifiPassword = passwordField(wifi, "Wi-Fi password", "Enter network password");
+        Button reveal = ui.button("Show password", false, false);
+        reveal.setOnClickListener(view -> {
+            boolean hidden = wifiPassword.getTransformationMethod() != null;
+            wifiPassword.setTransformationMethod(hidden ? null : android.text.method.PasswordTransformationMethod.getInstance());
+            reveal.setText(hidden ? "Hide password" : "Show password");
+            wifiPassword.setSelection(wifiPassword.length());
+        });
+        deviceControls.add(reveal);
+        ui.fullButton(wifi, reveal);
+        deviceButton(wifi, "Save Wi-Fi", true, false, () -> {
+            session.connection.saveWifi(wifiName.getText().toString(), wifiPassword.getText().toString());
+            wifiPassword.setText("");
+        });
+        LinearLayout remote = ui.card(content);
+        remote.addView(ui.text("Remote URL", 18, R.color.text_primary));
+        remote.addView(ui.muted("Choose where updates come from."));
+        remoteUrl = field(remote, "Remote base URL", "https://updates.example.com/mokuku/", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        remoteUrl.setText(session.remoteUrl);
+        deviceButton(remote, "Save remote URL", true, false, () -> session.connection.saveUrl(remoteUrl.getText().toString().trim()));
+    }
+
+    private void mokukuIIUpdates() {
+        LinearLayout firmware = ui.card(content);
+        firmware.addView(ui.text("Firmware", 18, R.color.text_primary));
+        firmwareVersion = ui.muted("");
+        firmware.addView(firmwareVersion);
+        firmware.addView(ui.muted("Send a MOKUKU II app image from this phone. MOKUKU II restarts into it."));
+        deviceButton(firmware, "Choose firmware image", true, false, () -> {
+            Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*");
+            startActivityForResult(pick, FIRMWARE_IMAGE);
+        });
+        LinearLayout transfer = ui.column();
+        firmware.addView(transfer);
+        progressCard(transfer, MokukuConnection.FIRMWARE_UPDATE, "Cancel update");
+        firmwareProgress = transfer;
+        LinearLayout voice = ui.card(content);
+        voice.addView(ui.text("Voice commands", 18, R.color.text_primary));
+        voice.addView(ui.muted("Changing the language restarts MOKUKU II."));
+        languageButton(voice, "English", "en");
+        languageButton(voice, "Mandarin", "cn");
+        LinearLayout rollback = ui.card(content);
+        rollback.addView(ui.text("Rollback", 18, R.color.text_primary));
+        rollback.addView(ui.muted("Restarts into the other slot's firmware when it is older."));
+        deviceButton(rollback, "Roll back firmware", false, true, () -> confirm("Roll back MOKUKU II's firmware?",
+                "MOKUKU II restarts into its previous firmware and disconnects.", "Roll back",
+                () -> session.connection.setProperty(MokukuProtocol.PROPERTY_ROLLBACK, new byte[0], "Firmware rollback", true)));
+        updateVersions();
+        updateProgress();
+    }
+
+    private void languageButton(LinearLayout parent, String label, String language) {
+        deviceButton(parent, label, false, false, () -> confirm("Use " + label + " voice commands?",
+                "MOKUKU II restarts if the language changes.", "Use " + label,
+                () -> session.connection.setProperty(MokukuProtocol.PROPERTY_LANGUAGE,
+                        language.getBytes(java.nio.charset.StandardCharsets.US_ASCII), label + " voice commands", false)));
+    }
+
     private void updateVersions() {
+        if (firmwareVersion != null && snapshot.mokukuII) {
+            firmwareVersion.setText("Running " + information(3) + "\n" + information(MokukuProtocol.PROPERTY_FIRMWARE_SLOTS));
+            return;
+        }
         if (firmwareVersion != null) firmwareVersion.setText("Last received firmware: " + information(3));
         if (memeVersion != null) memeVersion.setText("Last received meme versions: " + information(5));
     }
@@ -495,6 +548,13 @@ public final class MainActivity extends Activity {
         intro("A little eye contact.", "Try a tap. See how MOKUKU responds.");
         LinearLayout card = ui.card(content);
         card.addView(ui.eyes(false), new LinearLayout.LayoutParams(-1, ui.dp(112)));
+        if (snapshot.mokukuII) {
+            propertyButton(card, "Next left panel", MokukuProtocol.PROPERTY_PANEL_ACTION, 1);
+            propertyButton(card, "Next right panel", MokukuProtocol.PROPERTY_PANEL_ACTION, 2);
+            propertyButton(card, "Switch meme/data mode", MokukuProtocol.PROPERTY_PANEL_ACTION, 3);
+            card.addView(ui.muted("From meme mode, a next-panel tap returns both eyes to data panels."));
+            return;
+        }
         commandButton(card, "Left click", 43);
         commandButton(card, "Right click", 53);
         commandButton(card, "Change eye mode", 10);
@@ -505,8 +565,13 @@ public final class MainActivity extends Activity {
         deviceButton(parent, label, false, false, () -> session.connection.command(command, label));
     }
 
+    private void propertyButton(LinearLayout parent, String label, int property, int value) {
+        deviceButton(parent, label, false, false, () -> session.connection.setProperty(property, new byte[] {(byte) value}, label, false));
+    }
+
     private void debug() {
         intro("A closer look.", "A few useful tools, all in one place.");
+        if (snapshot.mokukuII) { mokukuIIDebug(); return; }
         LinearLayout obd = ui.card(content);
         obd.addView(ui.text("OBD connection", 18, R.color.text_primary));
         commandButton(obd, "Enable OBD", 34);
@@ -529,6 +594,20 @@ public final class MainActivity extends Activity {
         open.setOnClickListener(view -> navigate("records"));
         ui.fullButton(recording, open);
         recording.addView(ui.muted("Refresh recordings after stopping to find the device file."));
+    }
+
+    private void mokukuIIDebug() {
+        LinearLayout obd = ui.card(content);
+        obd.addView(ui.text("OBD connection", 18, R.color.text_primary));
+        obd.addView(ui.muted("Current: " + information(MokukuProtocol.PROPERTY_OBD_ENABLED)));
+        propertyButton(obd, "Enable OBD", MokukuProtocol.PROPERTY_OBD_ENABLED, 1);
+        propertyButton(obd, "Disable OBD", MokukuProtocol.PROPERTY_OBD_ENABLED, 0);
+        LinearLayout recording = ui.card(content);
+        recording.addView(ui.text("Recording", 18, R.color.text_primary));
+        recording.addView(ui.muted("Start and stop recordings by voice in developer mode."));
+        Button open = ui.button("Open Data Collection", false, false);
+        open.setOnClickListener(view -> navigate("records"));
+        ui.fullButton(recording, open);
     }
 
     private void chooseDate() {
@@ -558,6 +637,15 @@ public final class MainActivity extends Activity {
             ui.gap(content, 14);
         }
         overview(content, "MOKUKU storage", storageText(), 61);
+        if (!snapshot.mokukuII) recordingAccess();
+        deviceButton(content, "Refresh recordings", false, false, () -> {
+            if (canListRecordings()) session.connection.refreshRecordings();
+            else enterRecordingAccessCode();
+        });
+        recordingsList();
+    }
+
+    private void recordingAccess() {
         LinearLayout access = ui.card(content);
         access.addView(ui.text("Recording access", 18, R.color.text_primary));
         access.addView(ui.muted(snapshot.hasRecordingAccessCode
@@ -570,24 +658,12 @@ public final class MainActivity extends Activity {
             forget.setOnClickListener(view -> session.connection.forgetRecordingAccessCode());
             ui.fullButton(access, forget);
         }
-        deviceButton(content, "Refresh recordings", false, false, () -> {
-            if (snapshot.hasRecordingAccessCode) session.connection.refreshRecordings();
-            else enterRecordingAccessCode();
-        });
+    }
+
+    private void recordingsList() {
         section("Returned recordings (" + snapshot.recordings.size() + ")");
         if (snapshot.busy) {
-            LinearLayout active = ui.card(content);
-            active.addView(ui.text(snapshot.operation, 16, R.color.accent));
-            progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
-            progress.setProgressTintList(android.content.res.ColorStateList.valueOf(ui.color(R.color.accent)));
-            active.addView(progress, new LinearLayout.LayoutParams(-1, ui.dp(12)));
-            progressText = ui.muted("");
-            active.addView(progressText);
-            if (snapshot.cancellable) {
-                Button cancel = ui.button("Cancel operation", false, false);
-                cancel.setOnClickListener(view -> session.connection.cancelOperation());
-                ui.fullButton(active, cancel);
-            }
+            progressCard(ui.card(content), snapshot.operation, snapshot.cancellable ? "Cancel operation" : null);
             updateProgress();
         }
         if (snapshot.recordings.isEmpty()) content.addView(ui.muted(snapshot.busy ? "Waiting for MOKUKU…" : "No recordings returned. Refresh after stopping a recording."));
@@ -599,11 +675,26 @@ public final class MainActivity extends Activity {
             String location = snapshot.saved.get(name);
             card.addView(ui.muted(location == null ? "On MOKUKU · device recording" : "Saved to " + location));
             deviceButton(card, location == null ? "Download to phone" : "Download again", false, false, () -> downloadRecording(name));
-            deviceButton(card, "Delete from MOKUKU", false, true, () -> confirm("Delete device recording?", name + "\nRequests recording stop before deleting. Phone copies are kept.", "Delete", () -> session.connection.deleteRecording(name, false)));
+            if (!snapshot.mokukuII) deviceButton(card, "Delete from MOKUKU", false, true, () -> confirm("Delete device recording?", name + "\nRequests recording stop before deleting. Phone copies are kept.", "Delete", () -> session.connection.deleteRecording(name, false)));
         }
-        content.addView(ui.muted("The firmware returns filenames only and may return a partial list. Device deletion keeps phone copies."));
+        content.addView(ui.muted(snapshot.mokukuII ? "The firmware returns filenames only. Device deletion keeps phone copies."
+                : "The firmware returns filenames only and may return a partial list. Device deletion keeps phone copies."));
         if (!snapshot.recordings.isEmpty()) deviceButton(content, "Clear all recordings", false, true, () -> confirm("Clear all recordings?",
-                "Requests recording stop, then removes device recordings, including ones you haven’t downloaded. Phone copies are kept.", "Clear all recordings", () -> session.connection.deleteRecording(null, true)));
+                (snapshot.mokukuII ? "Removes every device recording, including ones you haven’t downloaded. MOKUKU II refuses while recording."
+                        : "Requests recording stop, then removes device recordings, including ones you haven’t downloaded.") + " Phone copies are kept.", "Clear all recordings", () -> session.connection.deleteRecording(null, true)));
+    }
+
+    private void progressCard(LinearLayout parent, String title, String cancelLabel) {
+        parent.addView(ui.text(title, 16, R.color.accent));
+        progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        progress.setProgressTintList(android.content.res.ColorStateList.valueOf(ui.color(R.color.accent)));
+        parent.addView(progress, new LinearLayout.LayoutParams(-1, ui.dp(12)));
+        progressText = ui.muted("");
+        parent.addView(progressText);
+        if (cancelLabel == null) return;
+        Button cancel = ui.button(cancelLabel, false, false);
+        cancel.setOnClickListener(view -> session.connection.cancelOperation());
+        ui.fullButton(parent, cancel);
     }
 
     private EditText passwordField(LinearLayout parent, String label, String hint) {
@@ -648,6 +739,11 @@ public final class MainActivity extends Activity {
 
     private void updateProgress() {
         if (progress == null) return;
+        if (firmwareProgress != null) {
+            boolean updating = MokukuConnection.FIRMWARE_UPDATE.equals(snapshot.operation);
+            firmwareProgress.setVisibility(updating ? View.VISIBLE : View.GONE);
+            if (!updating) return;
+        }
         progress.setIndeterminate(snapshot.total == 0);
         if (snapshot.total > 0) progress.setProgress((int) (100 * snapshot.received / snapshot.total));
         progressText.setText(Ui.downloadProgressText(snapshot.received, snapshot.total, snapshot.downloadElapsedMilliseconds));
@@ -774,5 +870,10 @@ public final class MainActivity extends Activity {
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == ENABLE_BLUETOOTH && resultCode == RESULT_OK) findDevice();
+        if (requestCode == FIRMWARE_IMAGE && resultCode == RESULT_OK && data != null && data.getData() != null) {
+            Uri image = data.getData();
+            confirm("Send this firmware image?", "MOKUKU II writes it to its other slot and restarts into it. Canceling restarts MOKUKU II into its current firmware.",
+                    "Send firmware", () -> session.connection.updateFirmware(image));
+        }
     }
 }

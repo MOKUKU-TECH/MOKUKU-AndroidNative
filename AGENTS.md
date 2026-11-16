@@ -5,20 +5,24 @@ Direct user instructions take precedence; flag conflicts with these rules.
 ## Scope and references
 
 This repository is the native Android companion for the original two-eye ESP32-S3
-MOKUKU. Do not add MOKUKU II support or its set/get protocol.
+MOKUKU and MOKUKU II. The advertised name selects the protocol: `mokuku_*` uses the
+original message IDs, `mokukuii*` the set/get protocol. Show only the actions the
+connected device supports.
 
 Read [README.md](README.md) before working. For UI changes, read
 [design/README.md](design/README.md); for BLE and device actions, read
 [design/PROTOCOL_MAP.md](design/PROTOCOL_MAP.md).
 
-The Android app uses native Java/XML UI and the original BLE protocol. `design/`
+The Android app uses native Java/XML UI. `design/`
 contains an offline browser prototype with sample data. Keep prototype interactions clearly labeled;
 do not present sample connections, settings, downloads, or commands as real device
 operations. Implement native features only within the requested task's scope.
 
 When checked out inside `MobiliMOKUKU`, verify protocol behavior against
 `../IDF_SHARED/backend/ble_messager.cc`, `../IDF_SHARED/sdcard/sd_card.c`, and
-`../MOKUKU-BleControl/monitor_app/`. Follow the parent repository's applicable instructions.
+`../MOKUKU-BleControl/monitor_app/`; for MOKUKU II, against
+`../doc/MOKUKU_II_BLE_CONTROL.md`, `../IDF_MOKUKU_II_prototype/main/bluetooth/host_server.c`, and
+`../MOKUKU-BleControl/monitor_app_II/`. Follow the parent repository's applicable instructions.
 For standalone checkouts, use the local protocol map and identify behavior that
 still needs firmware or hardware verification rather than guessing.
 
@@ -49,7 +53,7 @@ still needs firmware or hardware verification rather than guessing.
 - Show device information only after it is received. Clear device values, query
   errors, and the returned recording list on disconnect; preserve downloaded phone
   copies. Distinguish unavailable information, command acceptance, and verified completion.
-- Preserve right-eye-first update ordering. Require confirmation for rollback,
+- Preserve right-eye-first update ordering on the original MOKUKU. Require confirmation for rollback,
   per-file deletion, and clearing all recordings. Device deletion keeps phone copies.
 - Do not invent recording dates, sizes, or complete-list guarantees from a
   filename-only directory reply. Follow the protocol map's clear-all limitations.

@@ -8,9 +8,12 @@ import java.util.Arrays;
 import static org.junit.Assert.*;
 
 public class MokukuProtocolTest {
-    @Test public void selectsOriginalMokukuOnly() {
+    @Test public void tellsDeviceGenerationFromItsName() {
         assertTrue(MokukuProtocol.isOriginalDevice("mokuku_73A1"));
         assertFalse(MokukuProtocol.isOriginalDevice("mokukuii73A1"));
+        assertTrue(MokukuProtocol.isMokukuII("mokukuii9EAB"));
+        assertFalse(MokukuProtocol.isMokukuII("mokuku_73A1"));
+        assertFalse(MokukuProtocol.isMokukuII(null));
         assertFalse(MokukuProtocol.isOriginalDevice(null));
         assertFalse(MokukuProtocol.isOriginalDevice("Other device"));
     }
@@ -35,12 +38,13 @@ public class MokukuProtocolTest {
 
     @Test public void listsOnlySafeRecordingNamesNewestFirst() {
         assertEquals(Arrays.asList("mobili_128.record", "mobili_12.record", "mobili_2.record"),
-                MokukuProtocol.recordings(reply(60, "mobili_2.record,mobili_12.record,../secret,mobili_128.record,mobili_2.record")));
+                MokukuProtocol.recordings(Arrays.asList("mobili_2.record,mobili_12.record,../secret,mobili_128.record,mobili_2.record".split(","))));
         assertEquals(Arrays.asList("20261116_143512_1.rec", "20261116_143512.rec", "20251231_235959.rec",
                         "recording_10.rec", "recording_9.rec", "mobili_3.record"),
-                MokukuProtocol.recordings(reply(60, "recording_9.rec,mobili_3.record,20251231_235959.rec,"
-                        + "20261116_143512.rec,recording_10.rec,20261116_143512_1.rec,2026_1.rec,20261116_143512.record")));
-        assertThrows(IllegalArgumentException.class, () -> MokukuProtocol.recordPath("../mobili_1.record"));
+                MokukuProtocol.recordings(Arrays.asList(("recording_9.rec,mobili_3.record,20251231_235959.rec,"
+                        + "20261116_143512.rec,recording_10.rec,20261116_143512_1.rec,2026_1.rec,20261116_143512.record").split(","))));
+        assertThrows(IllegalArgumentException.class, () -> MokukuProtocol.recordPath("../mobili_1.record", false));
+        assertEquals("/sdcard/record/mobili_1.record", MokukuProtocol.recordPath("mobili_1.record", true));
         assertThrows(IllegalArgumentException.class, () -> MokukuProtocol.textReply(new byte[] {60, 0}, 60));
     }
 
@@ -72,6 +76,39 @@ public class MokukuProtocolTest {
         frame[16] = (byte) crc;
         frame[17] = (byte) (crc >> 8);
         return frame;
+    }
+
+    @Test public void framesMokukuIIPropertiesAndDecodesReplies() {
+        byte[] list = MokukuProtocol.listDirectory(258, "/sdcard/record");
+        assertArrayEquals(new byte[] {3, 10, 2, 1}, Arrays.copyOf(list, 4));
+        assertEquals("/sdcard/record", new String(list, 4, list.length - 4, StandardCharsets.UTF_8));
+        assertEquals(3 << 8 | 10, MokukuProtocol.replyKey(list, true));
+        assertEquals(3, MokukuProtocol.replyKey(new byte[] {3}, false));
+        assertArrayEquals(new byte[] {'2', '.', '0'}, MokukuProtocol.propertyValue(new byte[] {3, 1, 0, '2', '.', '0'}));
+        assertThrows(IllegalArgumentException.class, () -> MokukuProtocol.propertyValue(new byte[] {2, 13, 4}));
+        assertEquals("DF:01:00:00:4A:01", MokukuProtocol.describeProperty(2, new byte[] {(byte) 0xdf, 1, 0, 0, 0x4a, 1}));
+        assertEquals("330/479", MokukuProtocol.describeProperty(7, new byte[] {(byte) 0xdf, 1, 0, 0, 0x4a, 1, 0, 0}));
+        assertEquals("On", MokukuProtocol.describeProperty(6, new byte[] {1}));
+        assertEquals("English", MokukuProtocol.describeProperty(9, "en".getBytes(StandardCharsets.US_ASCII)));
+        assertEquals(Arrays.asList("mobili_1.record", "mobili_2.record"),
+                MokukuProtocol.directoryNames("mobili_1.record,mobili_2.record".getBytes(StandardCharsets.UTF_8)));
+        assertTrue(MokukuProtocol.directoryNames(new byte[0]).isEmpty());
+    }
+
+    @Test public void splitsFirmwareSectorsIntoCrcCheckedPackets() {
+        byte[] image = new byte[25];
+        for (int i = 0; i < image.length; i++) image[i] = (byte) i;
+        java.util.List<byte[]> packets = MokukuProtocol.sectorPackets(1, image, 10, 15, 13);
+        assertEquals(2, packets.size());
+        assertArrayEquals(new byte[] {1, 0, 0}, Arrays.copyOf(packets.get(0), 3));
+        assertEquals(MokukuProtocol.LAST_PACKET, MokukuProtocol.unsigned(packets.get(1)[2]));
+        byte[] sector = new byte[17];
+        System.arraycopy(packets.get(0), 3, sector, 0, 10);
+        System.arraycopy(packets.get(1), 3, sector, 10, 7);
+        assertArrayEquals(Arrays.copyOfRange(image, 10, 25), MokukuProtocol.withoutCrc(sector, sector.length));
+        assertArrayEquals(new int[] {2, 1, 3}, MokukuProtocol.sectorAcknowledgement(MokukuProtocol.acknowledgement(2, 1, 3)));
+        byte[] start = MokukuProtocol.withoutCrc(MokukuProtocol.startFirmwareUpdate(1000), 8);
+        assertArrayEquals(new byte[] {(byte) 200, 0, (byte) 0xe8, 3, 0, 0}, start);
     }
 
     @Test public void encodesSelectedWallClockWithoutVehicleData() {
