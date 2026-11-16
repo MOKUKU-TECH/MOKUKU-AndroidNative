@@ -6,7 +6,7 @@ Scope: two ESP32-S3 eyes. All control/file writes use Transfer Message
 Service: `4fafc201-1fb5-459e-8fcc-c5c9c331914b`.
 
 Source of truth: parent repository `IDF_SHARED/backend/ble_messager.cc`,
-`IDF_SHARED/sdcard/sd_card.c`, and `BleControl/monitor_app/ble_client.py`.
+`IDF_SHARED/sdcard/sd_card.c`, and `MOKUKU-BleControl/monitor_app/ble_client.py`.
 The parent `doc/BLE_CONTROL.md` is useful context; SD free/total ordering below
 follows the firmware. Setting a calendar date differs from the desktop client's
 clock-only time sync, as detailed below.
@@ -40,18 +40,21 @@ Firmware handlers use strings as C strings in several places; the implementation
 must match the existing desktop client's framing and test against a physical device.
 
 File list, open/read, and delete require the existing developer authorization
-exchange on message ID 44. Use the reference client's session setup; do not invent
-a MOKUKU II set/get handshake or expose authorization internals as normal UI.
-Use the deployment's existing authorization value without putting it in logs or
-design screenshots.
+exchange on message ID 44. Collect the code in the native Data Collection dialog
+and keep it in memory for the current connection. ID 44 has no application reply;
+GATT write completion does not prove authorization. A rejected code can leave file
+requests unanswered. Do not invent a MOKUKU II set/get handshake or include codes in
+logs, previews, source, or build configuration.
 
 Set date/time by writing the existing 11-byte data packet on **Transfer Data**:
 `01 speed rpm_high rpm_low fuel timestamp_LE32 backlight command`.
+The native app encodes the selected local calendar fields as UTC-based seconds,
+with speed 255, RPM/fuel 0, backlight 0, and command 0. This preserves the selected
+wall-clock time without inventing vehicle data. Hardware verification is pending.
 The firmware uses this value both modulo 86400 for its clock and through `localtime`
 for its debug calendar date when GPS has no fix. The existing desktop time-sync
 helper sends local seconds since midnight, which does not encode a selected calendar
-date. A date-setting implementation must define the epoch/timezone encoding and
-verify both clock and calendar behavior on hardware; it cannot reuse that helper
+date. Verify both clock and calendar behavior on hardware; the app does not reuse that helper
 unchanged. Zero timestamp is ignored; zero backlight does not
 change brightness. This packet also updates speed/RPM/fuel, so the date action must
 define those values deliberately rather than sending an unrelated command packet.

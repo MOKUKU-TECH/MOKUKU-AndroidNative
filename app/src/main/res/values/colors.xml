@@ -1,6 +1,12 @@
 <resources>
-    <color name="background">#101820</color>
-    <color name="accent">#70E1B5</color>
-    <color name="text_primary">#F5F7FA</color>
-    <color name="text_secondary">#B7C5D3</color>
+    <color name="background">#0C1218</color>
+    <color name="surface">#151E27</color>
+    <color name="raised">#1D2934</color>
+    <color name="border">#2A3945</color>
+    <color name="accent">#9AD8C2</color>
+    <color name="accent_ink">#10271F</color>
+    <color name="text_primary">#EDF3F5</color>
+    <color name="text_secondary">#A2B2BE</color>
+    <color name="warm">#E4BA83</color>
+    <color name="danger">#F0A19B</color>
 </resources>

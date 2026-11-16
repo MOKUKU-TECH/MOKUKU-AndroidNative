@@ -1,8 +1,70 @@
 # MOKUKU Android Native
 
-Native Android debug app for MOKUKU, using the Java/XML and Gradle structure of
-`MobiliAndroidHUD`. The base contains one launch screen; BLE communication and
-device controls are not implemented yet.
+A calm, dark Android companion for the original two-eye ESP32-S3 MOKUKU. Connect
+over Bluetooth LE to inspect device information, download and manage recordings,
+try eye interactions, and send update or debug commands.
+
+Four tabs keep the app easy to explore: **Home**, **Data Collection**, **Trips**
+(coming later), and **Tools**, where Updates and Debug live. Muted mint accents,
+soft slate cards, and generous spacing follow the approved companion design.
+
+| Home | Data Collection |
+|---|---|
+| <img src="design/previews/native-home.png" width="300" alt="Native Home page with discovery and device information cards" /> | <img src="design/previews/native-records.png" width="300" alt="Native Data Collection page with recording access and file controls" /> |
+
+Native Android renders show the disconnected state; device values populate after
+connection. See [Tools](design/previews/native-tools.png),
+[Updates](design/previews/native-updates.png), and the
+[access-code dialog](design/previews/native-access-code.png) for more screens.
+
+The app uses native Java/XML and the Gradle structure of `MobiliAndroidHUD`.
+It supports the original MOKUKU only.
+
+## Use the app
+
+- **Home:** find/connect to a `mokuku_` device, then query both eyes' firmware
+  versions, SD free/total space, voice model, and MAC address. Allow Nearby devices
+  permission on Android 12+, or location permission/services on Android 6–11.
+- **Simulation:** send left/right clicks or toggle eye mode from Home.
+- **Tools → Updates:** save Wi-Fi and the remote URL independently; request
+  firmware OTA, voice-model OTA, meme updates, or per-eye rollback. Complete the
+  right-eye update before confirming a left-eye update. Reconnect after the device
+  finishes and refresh versions; command acceptance is not update completion.
+- **Tools → Debug:** request OBD on/off, enable debug logging, set date/time, and
+  start/stop recording. The firmware does not report OBD, mode, or recording state.
+- **Data Collection:** refresh returned recordings, download one at a time,
+  delete a file, or clear device recordings. Enter the device access code in
+  **Recording access** first. Deletion first requests recording stop.
+  Downloads show byte progress, average speed, and approximate time remaining
+  after an initial estimation period.
+  Complete downloads are kept inside the app; **Save to phone** opens Android's
+  location picker. Device deletion keeps these copies. Cancel/disconnect discards
+  only an unfinished download; start it again to retry.
+- **Trips:** coming later.
+
+The phone sends commands over BLE; MOKUKU itself downloads OTA assets over its
+configured Wi-Fi. The app needs no internet or broad storage permission. Date/time
+sends the chosen wall-clock fields in the firmware's shared calendar/clock basis;
+GPS can override its debug date. This behavior needs confirmation on hardware.
+
+The original firmware can omit filenames from a long directory response, and an
+empty result can also mean the directory could not be opened. The app reports
+**No recordings returned after clearing**, rather than promising every file was
+deleted. An oversized notification can time out; reconnect and retry. Hardware
+validation is still required for BLE, date/time, OTA, and SD operations.
+
+Device information and the returned recording list are cleared on disconnect;
+downloaded phone copies remain available.
+
+## Recording access
+
+Connect, open **Data Collection → Enter access code**, and choose **Use code** to
+load recordings. Input is masked with an optional reveal control. The code stays
+in memory for the current connection, including screen rotation, and is cleared on
+disconnect or app exit. It is not saved on the phone or compiled into the APK.
+Use **Change access code** to retry. The firmware does not acknowledge code
+acceptance; a wrong code can make file requests time out. No Actions secret or
+special build configuration is needed.
 
 ## App design
 
@@ -11,7 +73,8 @@ four tabs: Home (with Simulation), Data Collection, Trips (coming later), and To
 (with Updates and Debug).
 Open [the interactive prototype](design/index.html) in a browser to review the
 dark charcoal and mint style. Every device value and interaction in it is sample
-data; it uses no Bluetooth or network access. The Android starter remains unchanged.
+data; it uses no Bluetooth or network access. The native implementation uses real
+device responses; the browser prototype remains a design reference.
 
 ## Build
 
@@ -24,7 +87,8 @@ export ANDROID_HOME=/path/to/android-sdk
 ./scripts/build.sh
 ```
 
-The script builds and lints the debug app, then exports `output/mokuku-debug.apk`.
+The script builds, runs protocol/native UI checks, and lints the debug app, then
+exports `output/mokuku-debug.apk`.
 To install it on a connected, authorized device or running emulator:
 
 ```bash
@@ -32,7 +96,7 @@ To install it on a connected, authorized device or running emulator:
 ```
 
 Open this directory in Android Studio to import the project. On Windows, use
-`gradlew.bat :app:assembleDebug :app:lintDebug`; the APK is at
+`gradlew.bat :app:assembleDebug :app:testDebugUnitTest :app:lintDebug`; the APK is at
 `app/build/outputs/apk/debug/app-debug.apk`.
 
 The application ID is `com.mokuku.debug`; minimum Android version is 6.0 (API 23).
@@ -57,13 +121,15 @@ write the APK to the same `output/` directory on the host.
 |---|---|
 | `AGENTS.md` | Repository scope, design conventions, build checks, and contributor workflow for coding agents. |
 | `app/` | Native Android application: manifest, Java activity, XML resources. |
+| `app/src/main/java/com/mokuku/debug/` | Native UI (`MainActivity`, `Ui`), serialized BLE session/file operations (`MokukuConnection`), and byte framing/validation (`MokukuProtocol`). |
+| `app/src/test/` | Protocol fixtures and native navigation/lifecycle checks with Robolectric. |
 | `design/` | Visual style, screen flows, original-MOKUKU protocol map, and interactive prototype. |
 | `gradle/`, `gradlew`, `gradlew.bat` | Gradle wrapper for Linux, macOS, and Windows. |
-| `scripts/build.sh` | Build, lint, export, and optionally install the debug APK. |
+| `scripts/build.sh` | Build, test, lint, export, and optionally install the debug APK. |
 | `artifacts/docker/dev.dockerfile` | Android build environment. |
-| `.github/workflows/android.yml` | GitHub Actions build, lint, and APK artifact upload. |
+| `.github/workflows/android.yml` | GitHub Actions build, tests, lint, and APK artifact upload. |
 
-GitHub Actions runs `scripts/build.sh` for branch pushes and pull requests that
+GitHub Actions runs `scripts/build.sh` for pushes to `main`/`master` and pull requests that
 change `app/`, the Gradle build files/wrapper, the build helper, or the APK workflow
 itself. Markdown and changes confined to documentation or `design/` do not trigger
 an APK build. Manual runs remain available. Successful builds upload

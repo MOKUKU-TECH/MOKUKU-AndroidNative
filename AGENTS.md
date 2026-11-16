@@ -11,14 +11,14 @@ Read [README.md](README.md) before working. For UI changes, read
 [design/README.md](design/README.md); for BLE and device actions, read
 [design/PROTOCOL_MAP.md](design/PROTOCOL_MAP.md).
 
-The current Android app is a Java/XML starter. `design/` contains an offline
-browser prototype with sample data. Keep prototype interactions clearly labeled;
+The Android app uses native Java/XML UI and the original BLE protocol. `design/`
+contains an offline browser prototype with sample data. Keep prototype interactions clearly labeled;
 do not present sample connections, settings, downloads, or commands as real device
 operations. Implement native features only within the requested task's scope.
 
 When checked out inside `MobiliMOKUKU`, verify protocol behavior against
 `../IDF_SHARED/backend/ble_messager.cc`, `../IDF_SHARED/sdcard/sd_card.c`, and
-`../BleControl/monitor_app/`. Follow the parent repository's applicable instructions.
+`../MOKUKU-BleControl/monitor_app/`. Follow the parent repository's applicable instructions.
 For standalone checkouts, use the local protocol map and identify behavior that
 still needs firmware or hardware verification rather than guessing.
 
@@ -27,8 +27,10 @@ still needs firmware or hardware verification rather than guessing.
 | Path | Purpose |
 |---|---|
 | `app/` | Native Android manifest, Java code, and XML resources. |
+| `app/src/main/java/com/mokuku/debug/` | `MainActivity`/`Ui` for screens, `MokukuConnection` for BLE/file operations, and `MokukuProtocol` for byte framing/validation. |
+| `app/src/test/` | Protocol fixtures and native UI/lifecycle checks. |
 | `design/` | Style guide, screen flows, protocol map, and HTML/CSS/JavaScript prototype. |
-| `design/previews/` | Screenshots rendered from the prototype. |
+| `design/previews/` | Browser prototype screenshots and labeled native Android renders. |
 | `gradle/`, `gradlew`, `gradlew.bat` | Checked-in Gradle wrapper. |
 | `scripts/build.sh` | Build, lint, export, and optional installation helper. |
 | `.github/workflows/android.yml` | GitHub Actions APK build and artifact upload. |
@@ -44,8 +46,9 @@ still needs firmware or hardware verification rather than guessing.
   contrast, system font scaling, reduced motion, and Android Back behavior.
 - Wi-Fi credentials and the remote URL have separate forms, save buttons,
   validation, and feedback. Changing one must not require completing the other.
-- Show device information only after it is received. Distinguish cached values,
-  unavailable information, command acceptance, and verified completion.
+- Show device information only after it is received. Clear device values, query
+  errors, and the returned recording list on disconnect; preserve downloaded phone
+  copies. Distinguish unavailable information, command acceptance, and verified completion.
 - Preserve right-eye-first update ordering. Require confirmation for rollback,
   per-file deletion, and clearing all recordings. Device deletion keeps phone copies.
 - Do not invent recording dates, sizes, or complete-list guarantees from a
@@ -63,10 +66,15 @@ configuration as described in the README.
 ./scripts/build.sh
 ```
 
-This runs `:app:assembleDebug` and `:app:lintDebug`, then exports
+This runs `:app:assembleDebug`, `:app:testDebugUnitTest`, and `:app:lintDebug`, then exports
 `output/mokuku-debug.apk`. Install on a device only when requested, using
 `./scripts/build.sh --install`. Docker is optional for Android builds; firmware
 container instructions in the parent repository concern firmware changes.
+
+Collect recording access codes through the masked Data Collection dialog. Keep
+them in memory for the current connection and clear them on disconnect. Do not
+persist them, compile them into APKs, or require build/CI secrets. Keep file transfer
+and storage work off the UI thread and preserve queued GATT operation ordering.
 
 For Android or build configuration changes, run the build helper. For prototype
 JavaScript changes, run `node --check design/app.js` and exercise the affected
@@ -77,7 +85,7 @@ link and diff checks rather than an unrelated app rebuild.
 
 GitHub Actions is the CI build path. Do not add `.pipeline/`. Automatic APK builds
 watch app source and build inputs; documentation/design-only changes must not
-trigger them. Preserve the shared push/PR path filter, manual builds, and APK
+trigger them. Limit push builds to `main`/`master`; preserve the shared push/PR path filter, manual builds, and APK
 artifact upload. Inspect failed checks before reporting a PR ready. Do not add
 placeholder tests or new test infrastructure for minor visual or documentation changes.
 

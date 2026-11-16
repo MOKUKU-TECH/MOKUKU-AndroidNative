@@ -2,7 +2,8 @@
 
 PR #1 establishes the visual style and screen flows for the original two-eye
 ESP32-S3 MOKUKU. It contains an interactive browser prototype with sample data.
-The Android starter app remains the buildable base for implementation after design review.
+The native Android app now implements these flows with the original device protocol;
+the browser prototype remains a sample-data design reference.
 
 Open `index.html` directly in a browser; no server, dependencies, or internet access
 are needed. The desktop controls jump between screens and connection states.
@@ -15,6 +16,16 @@ Screen previews: [Home](previews/home.png), [Data Collection](previews/data-coll
 [Tools](previews/tools.png), [Updates](previews/updates.png),
 [Debug](previews/debug.png), [Simulation](previews/simulation.png),
 and [Trips](previews/trips.png).
+
+Native Android previews, rendered with Robolectric in the disconnected state:
+[Home](previews/native-home.png), [320 dp Home](previews/native-home-small.png),
+[Tools](previews/native-tools.png), [Updates](previews/native-updates.png),
+[Data Collection](previews/native-records.png), and [320 dp Data Collection](previews/native-records-small.png).
+Blank access-code dialogs: [390 dp](previews/native-access-code.png),
+[320 dp](previews/native-access-code-small.png).
+Sample download-progress previews: [390 dp](previews/native-download.png),
+[320 dp](previews/native-download-small.png). These use simulated transfer values.
+All native previews validate layout only; they do not demonstrate a hardware connection.
 
 ## Direction: quiet technology
 
@@ -83,8 +94,9 @@ Meme versions may appear under Updates. Avoid a generic “healthy” or “up t
 claim: these cannot be inferred from a successful BLE connection or version query.
 
 Place a **Simulation** shortcut below the overview. **Tools**, the fourth tab,
-contains spacious **Updates** and **Debug** shortcuts. Device actions become unavailable after disconnect; cached values
-remain visible with **Last received** labeling until a new query succeeds.
+contains spacious **Updates** and **Debug** shortcuts. On disconnect, disable device
+actions and clear device values, query errors, and returned filenames. Keep completed
+phone downloads available.
 
 ## Tools → Updates
 
@@ -133,6 +145,14 @@ recording file was created.
 
 ## Data Collection
 
+Place a **Recording access** card above the file controls. **Enter access code**
+opens a masked dialog with optional reveal and **Use code** / **Cancel** actions.
+Using a code refreshes recordings; label it **Code entered**, without claiming
+authentication succeeded. **Change access code** opens a blank field. Keep the code
+in memory through navigation/rotation, then clear it on disconnect or app exit.
+Never include entered codes in previews. The browser prototype remains a sample-data
+reference; this access dialog is implemented in the native app.
+
 Show SD free/total space, **Refresh**, and the filenames returned from
 `/sd/record`. The directory API returns names only: do not invent recording dates,
 durations, distances, or file sizes. Numeric recording IDs can be sorted in
@@ -152,7 +172,11 @@ firmware also returns an empty listing when opening the directory fails; use
 of every file. Deleting only the initial, potentially partial listing is insufficient.
 
 Download one file at a time. Show received/total bytes and progress once the file
-open reply supplies its size. A completed file is available through Android's save
+open reply supplies its size. Below the byte count, show average payload speed in
+B/s, KiB/s, or MiB/s and approximate time remaining. Use elapsed monotonic time from
+the first read request; show **Estimating speed and time remaining…** until at least
+one second has elapsed and data has arrived. Reset estimates for each download;
+rotation preserves the current transfer. A completed file is available through Android's save
 or share flow. Only show **Saved to phone** after saving succeeds. Cancellation or
 disconnect leaves the file retryable and must not label a partial file as complete.
 
