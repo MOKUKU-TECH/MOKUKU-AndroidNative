@@ -53,6 +53,10 @@ final class MokukuConnection {
     private static final int REQUEST_QUEUE_LIMIT = 300;
     private static final int FIRMWARE_IMAGE_MAXIMUM_BYTES = 16 << 20;
     static final String FIRMWARE_UPDATE = "Updating firmware";
+    // The left eye restarts into its update with Bluetooth off; retry until it comes back.
+    private static final long RECONNECT_WINDOW_MILLISECONDS = 5 * 60_000;
+    private static final long RECONNECT_DELAY_MILLISECONDS = 3000;
+    private static final long LEFT_EYE_UPDATE_DELAY_MILLISECONDS = 500;
     interface Listener { void changed(Snapshot snapshot); }
     private interface Reply { void complete(byte[] value, String error); }
     private interface Names { void complete(List<String> names, String error); }
@@ -195,6 +199,8 @@ final class MokukuConnection {
             worker.postDelayed(this, KEEP_ALIVE_MILLISECONDS);
         }
     };
+    private long reconnectUntil;
+    private final Runnable reconnect = () -> { if (gatt == null) openGatt(); };
     private final Runnable connectionTimeout = () -> disconnectOnWorker("Connection timed out. Try again.");
     private final Runnable requestTimeout = () -> {
         if (active != null) Log.w(TAG, "Request timed out: replyId=" + active.replyId
@@ -240,6 +246,7 @@ final class MokukuConnection {
     void scan() {
         worker.post(() -> {
             if (gatt != null) { report("Disconnect before looking for another MOKUKU."); return; }
+            stopReconnecting();
             stopScanOnWorker();
             devices.clear();
             try {
@@ -296,6 +303,7 @@ final class MokukuConnection {
             Device device = devices.get(deviceAddress);
             if (device == null || adapter == null) { report("Search for MOKUKU again before connecting."); return; }
             stopScanOnWorker();
+            stopReconnecting();
             disconnectOnWorker("Connecting…");
             if (!address.equals(deviceAddress)) {
                 information.clear(); errors.clear(); recordings.clear(); saved.clear();
@@ -305,19 +313,33 @@ final class MokukuConnection {
             mokukuII = MokukuProtocol.isMokukuII(name);
             recordingAccessCode = recordingAccessPreferences.getString(address, "");
             context.getSharedPreferences("device", Context.MODE_PRIVATE).edit().putString("address", address).putString("name", name).apply();
-            mtu = 23;
-            try {
-                gatt = adapter.getRemoteDevice(deviceAddress).connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE);
-                if (gatt == null) { report("Could not start the Bluetooth connection."); return; }
-                worker.postDelayed(connectionTimeout, 18000);
-                report("Connecting to " + name + "…");
-            } catch (SecurityException | IllegalStateException exception) {
-                disconnectOnWorker("Bluetooth connection failed. Check permissions and try again.");
-            }
+            openGatt();
         });
     }
 
-    void disconnect() { worker.post(() -> disconnectOnWorker("Disconnected. You can reconnect whenever you’re ready.")); }
+    private void openGatt() {
+        mtu = 23;
+        try {
+            gatt = adapter.getRemoteDevice(address).connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE);
+            if (gatt == null) { disconnectOnWorker("Could not start the Bluetooth connection."); return; }
+            worker.postDelayed(connectionTimeout, 18000);
+            report(reconnectUntil != 0 ? "MOKUKU is updating. Reconnecting to " + name + "…" : "Connecting to " + name + "…");
+        } catch (SecurityException | IllegalStateException exception) {
+            disconnectOnWorker("Bluetooth connection failed. Check permissions and try again.");
+        }
+    }
+
+    private void stopReconnecting() {
+        reconnectUntil = 0;
+        worker.removeCallbacks(reconnect);
+    }
+
+    void disconnect() {
+        worker.post(() -> {
+            stopReconnecting();
+            disconnectOnWorker("Disconnected. You can reconnect whenever you’re ready.");
+        });
+    }
 
     private void disconnectOnWorker(String reason) {
         Log.i(TAG, "Disconnect: " + reason);
@@ -345,8 +367,16 @@ final class MokukuConnection {
         errors.clear();
         recordings.clear();
         recordingAccessCode = recordingAccessPreferences.getString(address, "");
+        if (reconnectUntil != 0 && android.os.SystemClock.elapsedRealtime() >= reconnectUntil) {
+            reconnectUntil = 0;
+            reason = "MOKUKU did not come back after the update. Reconnect to check versions.";
+        }
         endOperation(reason);
         for (Request request : failed) request.callback.complete(null, reason);
+        if (reconnectUntil != 0) {
+            worker.postDelayed(reconnect, RECONNECT_DELAY_MILLISECONDS);
+            reason = "MOKUKU is updating. Reconnecting…";
+        }
         report(reason);
     }
 
@@ -394,6 +424,7 @@ final class MokukuConnection {
                 if (status != BluetoothGatt.GATT_SUCCESS) { disconnectOnWorker("Could not subscribe to MOKUKU replies."); return; }
                 if (!subscriptions.isEmpty()) { subscribeNext(); return; }
                 worker.removeCallbacks(connectionTimeout);
+                reconnectUntil = 0;
                 ready = true;
                 if (mokukuII) worker.postDelayed(keepAlive, KEEP_ALIVE_MILLISECONDS);
                 report("Connected. Refreshing device information…");
@@ -592,8 +623,32 @@ final class MokukuConnection {
         return true;
     }
 
+    // Requests the right eye, then the left eye, which restarts; the app reconnects once it is back.
+    void updateBothEyes() {
+        worker.post(() -> {
+            if (!canStart()) return;
+            operation = "Updating both eyes";
+            operationCancellable = false;
+            publish();
+            BluetoothGatt connection = gatt;
+            send(MokukuProtocol.command(67), (reply, error) -> {
+                if (error != null) endOperation(error);
+                else worker.postDelayed(() -> requestLeftEyeUpdate(connection), LEFT_EYE_UPDATE_DELAY_MILLISECONDS);
+            });
+        });
+    }
+
+    private void requestLeftEyeUpdate(BluetoothGatt connection) {
+        if (gatt != connection || !ready) return;
+        send(MokukuProtocol.command(66), (reply, error) -> {
+            if (error != null) { endOperation(error); return; }
+            reconnectUntil = android.os.SystemClock.elapsedRealtime() + RECONNECT_WINDOW_MILLISECONDS;
+            disconnectOnWorker("Both eye updates requested.");
+        });
+    }
+
     void command(int command, String label) {
-        perform(MokukuProtocol.command(command), label, command >= 66 && command <= 73, null);
+        perform(MokukuProtocol.command(command), label, command >= 66 && command <= 73 && !MokukuProtocol.isRightEyeUpdate(command), null);
     }
 
     /** Sets a MOKUKU II property; restarting when acceptance reboots the device. */

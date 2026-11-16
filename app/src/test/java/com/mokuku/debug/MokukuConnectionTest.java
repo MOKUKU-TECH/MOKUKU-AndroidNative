@@ -80,6 +80,76 @@ public class MokukuConnectionTest {
         } finally { connection.close(); }
     }
 
+    @Test public void onlyLeftEyeUpdatesDisconnect() throws Exception {
+        assertTrue(requestUpdate(67).connected);
+        assertTrue(requestUpdate(69).connected);
+        assertTrue(requestUpdate(71).connected);
+        assertFalse(requestUpdate(66).connected);
+    }
+
+    private MokukuConnection.Snapshot requestUpdate(int command) throws Exception {
+        MokukuConnection connection = connectedSession();
+        try {
+            CountDownLatch replied = acceptCommands(connection, new ArrayList<>(), 1, new ArrayList<>());
+            connection.command(command, "test update");
+            assertTrue("Command was not sent", replied.await(5, TimeUnit.SECONDS));
+            onWorker(connection, () -> {});
+            onWorker(connection, () -> {});
+            MokukuConnection.Snapshot snapshot = connection.snapshot();
+            assertFalse(snapshot.busy);
+            assertTrue(snapshot.message, snapshot.message.startsWith("test update requested."));
+            return snapshot;
+        } finally { connection.close(); }
+    }
+
+    @Test public void bothEyesUpdateRequestsRightThenLeftAndReconnects() throws Exception {
+        MokukuConnection connection = connectedSession();
+        try {
+            List<byte[]> writes = new ArrayList<>();
+            List<Long> times = new ArrayList<>();
+            CountDownLatch replied = acceptCommands(connection, writes, 2, times);
+            connection.updateBothEyes();
+            onWorker(connection, () -> {});
+            onWorker(connection, () -> {});
+            assertEquals(1, writes.size());
+            org.robolectric.shadows.ShadowSystemClock.advanceBy(java.time.Duration.ofMillis(500));
+            assertTrue("Both commands were not sent", replied.await(5, TimeUnit.SECONDS));
+            onWorker(connection, () -> {});
+            onWorker(connection, () -> {});
+            assertArrayEquals(MokukuProtocol.command(67), writes.get(0));
+            assertArrayEquals(MokukuProtocol.command(66), writes.get(1));
+            assertTrue(times.get(1) - times.get(0) >= 500);
+            MokukuConnection.Snapshot snapshot = connection.snapshot();
+            assertFalse(snapshot.connected);
+            assertEquals("MOKUKU is updating. Reconnecting…", snapshot.message);
+            assertNotEquals(0L, (long) ReflectionHelpers.getField(connection, "reconnectUntil"));
+            connection.disconnect();
+            onWorker(connection, () -> {});
+            assertEquals(0L, (long) ReflectionHelpers.getField(connection, "reconnectUntil"));
+        } finally { connection.close(); }
+    }
+
+    // Replies to each command write as the original MOKUKU's left eye does.
+    @SuppressWarnings("deprecation")
+    private CountDownLatch acceptCommands(MokukuConnection connection, List<byte[]> writes, int count, List<Long> times) {
+        CountDownLatch replied = new CountDownLatch(count);
+        BluetoothGatt gatt = ReflectionHelpers.getField(connection, "gatt");
+        BluetoothGattCallback callback = ReflectionHelpers.getField(connection, "gattCallback");
+        BluetoothGattCharacteristic data = new BluetoothGattCharacteristic(MokukuProtocol.DATA,
+                BluetoothGattCharacteristic.PROPERTY_NOTIFY, BluetoothGattCharacteristic.PERMISSION_READ);
+        shadowOf(gatt).setGattCallback(new BluetoothGattCallback() {
+            @Override public void onCharacteristicWrite(BluetoothGatt value, BluetoothGattCharacteristic characteristic, int status) {
+                writes.add(characteristic.getValue().clone());
+                times.add(android.os.SystemClock.uptimeMillis());
+                callback.onCharacteristicWrite(value, characteristic, status);
+                data.setValue(new byte[] {1, 1});
+                callback.onCharacteristicChanged(value, data);
+                replied.countDown();
+            }
+        });
+        return replied;
+    }
+
     @Test public void disconnectClearsDeviceValuesAndPendingQueryErrorsButKeepsDownloads() throws Exception {
         MokukuConnection connection = connectedSession();
         try {

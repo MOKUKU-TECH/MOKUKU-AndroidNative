@@ -32,8 +32,11 @@ see [MOKUKU II](#mokuku-ii).
 - **Tools → Updates:** save Wi-Fi and the remote URL independently; the app
   refills the last saved values on its next launch. Request
   firmware OTA, voice-model OTA, meme updates, or per-eye rollback. Complete the
-  right-eye update before confirming a left-eye update. Reconnect after the device
-  finishes and refresh versions; command acceptance is not update completion.
+  right-eye update before confirming a left-eye update. Right-eye requests keep the
+  connection, since the left eye relays them; left-eye and voice requests disconnect.
+  Refresh versions after the device finishes; command acceptance is not update completion.
+  **Update both eyes** requests the right eye, then the left eye 500 ms later; the
+  app then reconnects for up to 5 minutes and refreshes versions once MOKUKU is back.
 - **Tools → Debug:** request OBD on/off, enable debug logging, set date/time, and
   start/stop recording. The firmware does not report OBD, mode, or recording state.
 - **Data Collection:** refresh returned recordings, download one at a time,

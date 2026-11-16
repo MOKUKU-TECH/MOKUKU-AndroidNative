@@ -115,13 +115,15 @@ firmware's buffers, not just the protocol's 255-byte envelope.
 
 Use separate cards for **Firmware OTA**, **Voice model**, **Meme assets**, and
 **Rollback**. Each per-eye action names its target explicitly. Firmware and meme
-updates guide the user through **Right eye first → reconnect → Left eye**; never
-trigger both as one simultaneous action. Voice OTA offers English and Mandarin,
+updates guide the user through **Right eye first, then left eye**. Firmware also
+offers **Update both eyes**: right-eye request, left-eye request 500 ms later, then
+automatic reconnection for up to 5 minutes while the left eye updates. Voice OTA offers English and Mandarin,
 and explains that it updates the right-eye model and both eyes' wake-word assets.
 
 Confirm the action and target before sending a rebooting operation. After command
-acknowledgement, say **Update requested** and explain the expected disconnect;
-there is no live OTA progress query. Reconnect and query versions to verify the
+acknowledgement, say **Update requested**. The connected left eye relays right-eye
+requests over UART, so only left-eye and voice requests disconnect; there is no
+live OTA progress query. Query versions after the device finishes to verify the
 result. Rollback requires a separate confirmation naming the eye.
 
 ## Simulation

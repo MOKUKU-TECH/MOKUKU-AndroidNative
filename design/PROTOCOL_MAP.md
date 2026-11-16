@@ -21,8 +21,8 @@ clock-only time sync, as detailed below.
 | SD information | `3D` (61) | `3D 01` + text `free_MB/total_MB`, **free first** |
 | Voice model | `39` (57) | `39 01 value`: 0 other/unavailable, 1 `wn10_himokuku` English, 2 Mandarin |
 | Wi-Fi name / password / remote URL | ID 7 / 8 / 9, UTF-8 byte length, UTF-8 text | Individual two-byte ID/success replies; no readback API |
-| Firmware OTA | `01 43` right (67), `01 42` left (66) | Command acceptance precedes update; right first, reconnect before left |
-| Rollback | `01 47` right (71), `01 46` left (70) | Acceptance is not proof of a successful rollback |
+| Firmware OTA | `01 43` right (67), `01 42` left (66) | Command acceptance precedes update; right first, then left. Only left-eye requests drop BLE; the left eye has no BLE until its update ends. Both eyes: 67, then 66 after 500 ms, then reconnect |
+| Rollback | `01 47` right (71), `01 46` left (70) | Acceptance is not proof of a successful rollback. Right-eye rollback keeps BLE |
 | Voice OTA | `01 48` English (72), `01 49` Mandarin (73) | Both eyes' wake-word assets and right-eye model |
 | Meme update | `01 45` right (69), `01 44` left (68) | Wi-Fi download on device; no BLE progress reply |
 | Left / right click | `01 2B` (43) / `01 35` (53) | Direct-command acceptance reply |

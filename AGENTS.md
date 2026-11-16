@@ -53,7 +53,8 @@ still needs firmware or hardware verification rather than guessing.
 - Show device information only after it is received. Clear device values, query
   errors, and the returned recording list on disconnect; preserve downloaded phone
   copies. Distinguish unavailable information, command acceptance, and verified completion.
-- Preserve right-eye-first update ordering on the original MOKUKU. Require confirmation for rollback,
+- Preserve right-eye-first update ordering on the original MOKUKU; **Update both eyes**
+  sends the right-eye request 500 ms before the left. Require confirmation for rollback,
   per-file deletion, and clearing all recordings. Device deletion keeps phone copies.
 - Do not invent recording dates, sizes, or complete-list guarantees from a
   filename-only directory reply. Follow the protocol map's clear-all limitations.

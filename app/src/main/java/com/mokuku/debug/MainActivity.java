@@ -449,9 +449,12 @@ public final class MainActivity extends Activity {
         firmware.addView(ui.text("Firmware OTA", 18, R.color.text_primary));
         firmwareVersion = ui.muted("");
         firmware.addView(firmwareVersion);
-        firmware.addView(ui.muted("Right eye first → reconnect → left eye."));
+        firmware.addView(ui.muted("Right eye first, then left eye."));
         updateButton(firmware, "Update right eye", 67, "right-eye firmware update");
         updateButton(firmware, "Update left eye", 66, "left-eye firmware update");
+        deviceButton(firmware, "Update both eyes", false, false, () -> confirm("Update both eyes?",
+                "MOKUKU downloads both firmware updates using its saved Wi-Fi and remote URL. The app requests the right eye, then the left eye 500 ms later. The left eye restarts, so the app disconnects and keeps reconnecting for up to 5 minutes.",
+                "Update", session.connection::updateBothEyes));
         LinearLayout voice = ui.card(content);
         voice.addView(ui.text("Voice model", 18, R.color.text_primary));
         voice.addView(ui.muted("Updates the right-eye model and both eyes’ wake-word assets."));
@@ -559,11 +562,14 @@ public final class MainActivity extends Activity {
     private void updateButton(LinearLayout parent, String label, int command, String description) {
         boolean rollback = command == 70 || command == 71;
         deviceButton(parent, label, false, rollback, () -> {
-            String message = rollback ? "Request the previous firmware for this eye. MOKUKU may restart and disconnect."
-                    : "MOKUKU downloads updates using its saved Wi-Fi and remote URL. The app will disconnect after the request; reconnect after the update finishes to check versions.";
+            boolean rightEye = MokukuProtocol.isRightEyeUpdate(command);
+            String message = (rollback ? "Request the previous firmware for this eye."
+                    : "MOKUKU downloads updates using its saved Wi-Fi and remote URL.")
+                    + (rightEye ? " The right eye restarts; the app stays connected through the left eye."
+                    : " The app will disconnect after the request; reconnect after the update finishes to check versions.");
             if (command == 66 || command == 68) {
                 android.widget.CheckBox checked = new android.widget.CheckBox(this);
-                checked.setText("The right-eye update is complete and I have reconnected.");
+                checked.setText("The right-eye update is complete.");
                 checked.setPadding(ui.dp(24), ui.dp(12), ui.dp(24), ui.dp(12));
                 AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Request " + description + "?")
                         .setMessage(message).setView(checked).setNegativeButton("Cancel", null)
