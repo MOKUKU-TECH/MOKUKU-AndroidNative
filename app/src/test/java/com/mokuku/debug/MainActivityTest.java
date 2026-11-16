@@ -13,6 +13,7 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.Robolectric;
 import org.robolectric.RobolectricTestRunner;
+import org.robolectric.RuntimeEnvironment;
 import org.robolectric.android.controller.ActivityController;
 import org.robolectric.annotation.Config;
 import org.robolectric.util.ReflectionHelpers;
@@ -67,7 +68,7 @@ public class MainActivityTest {
         }
     }
 
-    @Test public void rotationKeepsRouteButDoesNotPersistPassword() {
+    @Test public void rotationKeepsRouteAndWifiDraft() {
         try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class).setup()) {
             MainActivity activity = controller.get();
             ((ViewGroup) activity.findViewById(R.id.navigation)).getChildAt(3).performClick();
@@ -77,8 +78,25 @@ public class MainActivityTest {
             controller.recreate();
             activity = controller.get();
             assertNotNull(find(activity.findViewById(R.id.content), "Remote URL"));
-            assertEquals("", input(activity.findViewById(R.id.content), "Wi-Fi password").getText().toString());
+            assertEquals("test-value", input(activity.findViewById(R.id.content), "Wi-Fi password").getText().toString());
             assertNotNull(find(activity.findViewById(R.id.content), "Save Wi-Fi"));
+        }
+    }
+
+    @Test public void launchRefillsLastSavedUpdateSources() {
+        RuntimeEnvironment.getApplication().getSharedPreferences("update_sources", Context.MODE_PRIVATE).edit()
+                .putString("wifi_name", "test-network").putString("wifi_password", "test-value")
+                .putString("remote_url", "https://updates.example.com/mokuku").apply();
+        try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class).setup()) {
+            MainActivity activity = controller.get();
+            ((ViewGroup) activity.findViewById(R.id.navigation)).getChildAt(3).performClick();
+            click(find(activity.findViewById(R.id.content), "Updates"));
+            View content = activity.findViewById(R.id.content);
+            assertEquals("test-network", input(content, "Wi-Fi name").getText().toString());
+            EditText password = input(content, "Wi-Fi password");
+            assertEquals("test-value", password.getText().toString());
+            assertNotNull(password.getTransformationMethod());
+            assertEquals("https://updates.example.com/mokuku", input(content, "Remote base URL").getText().toString());
         }
     }
 
@@ -121,7 +139,7 @@ public class MainActivityTest {
     }
 
     @Test public void savedAccessCodeCanBeForgottenWhileDisconnected() throws Exception {
-        Context context = org.robolectric.RuntimeEnvironment.getApplication();
+        Context context = RuntimeEnvironment.getApplication();
         context.getSharedPreferences("device", Context.MODE_PRIVATE).edit()
                 .putString("address", "AA:BB:CC:DD:EE:FF").apply();
         context.getSharedPreferences("recording_access", Context.MODE_PRIVATE).edit()
