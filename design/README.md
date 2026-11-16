@@ -95,8 +95,8 @@ claim: these cannot be inferred from a successful BLE connection or version quer
 
 Place a **Simulation** shortcut below the overview. **Tools**, the fourth tab,
 contains spacious **Updates** and **Debug** shortcuts. On disconnect, disable device
-actions and clear device values, query errors, and returned filenames. Keep completed
-phone downloads available.
+actions and clear device values, query errors, and returned filenames. Keep the saved
+locations of this session's downloads.
 
 ## Tools → Updates
 
@@ -147,9 +147,12 @@ recording file was created.
 
 Place a **Recording access** card above the file controls. **Enter access code**
 opens a masked dialog with optional reveal and **Use code** / **Cancel** actions.
-Using a code refreshes recordings; label it **Code entered**, without claiming
-authentication succeeded. **Change access code** opens a blank field. Keep the code
-in memory through navigation/rotation, then clear it on disconnect or app exit.
+Using a code saves it privately for this device's BLE address and refreshes
+recordings. Show that the code is saved without claiming authentication succeeded.
+Reuse it after reconnect or app restart. **Change access code** opens a blank field;
+**Forget access code** removes only this device's saved code and keeps downloaded
+copies. Allow forgetting while disconnected; disable it during an operation.
+Exclude saved codes from backup and device transfer.
 Never include entered codes in previews. The browser prototype remains a sample-data
 reference; this access dialog is implemented in the native app.
 
@@ -176,8 +179,8 @@ open reply supplies its size. Below the byte count, show average payload speed i
 B/s, KiB/s, or MiB/s and approximate time remaining. Use elapsed monotonic time from
 the first read request; show **Estimating speed and time remaining…** until at least
 one second has elapsed and data has arrived. Reset estimates for each download;
-rotation preserves the current transfer. A completed file is available through Android's save
-or share flow. Only show **Saved to phone** after saving succeeds. Cancellation or
+rotation preserves the current transfer. A completed file is saved straight to the phone's
+`Download/MOKUKU` folder; only then show **Saved to** with its location. Cancellation or
 disconnect leaves the file retryable and must not label a partial file as complete.
 
 Handle disconnected, loading, no recordings, authorization failure, directory

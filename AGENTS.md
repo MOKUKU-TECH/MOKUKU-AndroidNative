@@ -72,8 +72,10 @@ This runs `:app:assembleDebug`, `:app:testDebugUnitTest`, and `:app:lintDebug`, 
 container instructions in the parent repository concern firmware changes.
 
 Collect recording access codes through the masked Data Collection dialog. Keep
-them in memory for the current connection and clear them on disconnect. Do not
-persist them, compile them into APKs, or require build/CI secrets. Keep file transfer
+them in app-private preferences per BLE device address and reuse them after reconnect
+or app restart. Exclude these preferences from backup and device transfer. Provide
+**Change access code** and **Forget access code**; forgetting keeps downloaded files.
+Do not compile codes into APKs or require build/CI secrets. Keep file transfer
 and storage work off the UI thread and preserve queued GATT operation ordering.
 
 For Android or build configuration changes, run the build helper. For prototype

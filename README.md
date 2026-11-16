@@ -37,9 +37,11 @@ It supports the original MOKUKU only.
   **Recording access** first. Deletion first requests recording stop.
   Downloads show byte progress, average speed, and approximate time remaining
   after an initial estimation period.
-  Complete downloads are kept inside the app; **Save to phone** opens Android's
-  location picker. Device deletion keeps these copies. Cancel/disconnect discards
-  only an unfinished download; start it again to retry.
+  **Download to phone** saves the complete file to the phone's `Download/MOKUKU`
+  folder, renamed by Android if the name is taken; Android 9 and older first ask for
+  storage access. Recordings are named by their start time (`YYYYMMDD_HHMMSS.rec`).
+  Device deletion keeps phone copies. Cancel/disconnect discards only an unfinished
+  download; start it again to retry.
 - **Trips:** coming later.
 
 The phone sends commands over BLE; MOKUKU itself downloads OTA assets over its
@@ -56,13 +58,29 @@ validation is still required for BLE, date/time, OTA, and SD operations.
 Device information and the returned recording list are cleared on disconnect;
 downloaded phone copies remain available.
 
+## Download performance
+
+During a download the app requests Android's high connection priority and restores
+balanced priority when it finishes, fails, or is canceled. It downloads over the
+File Command and File Data characteristics: MOKUKU streams CRC-checked sectors of
+up to 16 KB and waits for the app to acknowledge each one. The app asks for a
+sector again after a CRC failure, a missing packet, or 3 s without data, and stops
+after three failed attempts. Downloads need firmware with this sector transfer.
+
+The app requests MTU 517. For a slow transfer, capture
+`adb logcat -s MokukuBluetooth:I`. It reports the negotiated MTU, sector size,
+resent sectors, and the final result, without logging access codes.
+
 ## Recording access
 
 Connect, open **Data Collection → Enter access code**, and choose **Use code** to
-load recordings. Input is masked with an optional reveal control. The code stays
-in memory for the current connection, including screen rotation, and is cleared on
-disconnect or app exit. It is not saved on the phone or compiled into the APK.
-Use **Change access code** to retry. The firmware does not acknowledge code
+load recordings. Input is masked with an optional reveal control. The app saves
+the code privately on this phone for that device's BLE address and reuses it after
+reconnecting or restarting the app. Codes are excluded from backup/device transfer
+and are not compiled into the APK.
+Use **Change access code** to replace it, or **Forget access code** to remove the
+saved code, including while disconnected. Forgetting keeps downloaded phone copies.
+The firmware does not acknowledge code
 acceptance; a wrong code can make file requests time out. No Actions secret or
 special build configuration is needed.
 

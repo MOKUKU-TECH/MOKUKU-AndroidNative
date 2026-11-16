@@ -4,6 +4,7 @@ import android.view.View;
 import android.app.AlertDialog;
 import android.os.Handler;
 import android.os.Looper;
+import android.content.Context;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.EditText;
@@ -116,6 +117,37 @@ public class MainActivityTest {
             assertEquals("", input(dialog.getWindow().getDecorView(), "Recording access code").getText().toString());
             controller.recreate();
             assertFalse(dialog.isShowing());
+        }
+    }
+
+    @Test public void savedAccessCodeCanBeForgottenWhileDisconnected() throws Exception {
+        Context context = org.robolectric.RuntimeEnvironment.getApplication();
+        context.getSharedPreferences("device", Context.MODE_PRIVATE).edit()
+                .putString("address", "AA:BB:CC:DD:EE:FF").apply();
+        context.getSharedPreferences("recording_access", Context.MODE_PRIVATE).edit()
+                .putString("AA:BB:CC:DD:EE:FF", "sample-code").apply();
+        try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class).setup()) {
+            MainActivity activity = controller.get();
+            Object session = ReflectionHelpers.getField(activity, "session");
+            MokukuConnection connection = ReflectionHelpers.getField(session, "connection");
+            Handler worker = ReflectionHelpers.getField(connection, "worker");
+            CountDownLatch initialized = new CountDownLatch(1);
+            worker.post(initialized::countDown);
+            assertTrue(initialized.await(5, TimeUnit.SECONDS));
+            shadowOf(Looper.getMainLooper()).idle();
+            ((ViewGroup) activity.findViewById(R.id.navigation)).getChildAt(1).performClick();
+            assertFalse(((Button) find(activity.findViewById(R.id.content), "Change access code")).isEnabled());
+            Button forget = (Button) find(activity.findViewById(R.id.content), "Forget access code");
+            assertTrue(forget.isEnabled());
+            assertNull(find(activity.findViewById(R.id.content), "sample-code"));
+            click(forget);
+            CountDownLatch forgotten = new CountDownLatch(1);
+            worker.post(forgotten::countDown);
+            assertTrue(forgotten.await(5, TimeUnit.SECONDS));
+            shadowOf(Looper.getMainLooper()).idle();
+            assertNull(find(activity.findViewById(R.id.content), "Forget access code"));
+            assertNotNull(find(activity.findViewById(R.id.content), "Enter access code"));
+            assertTrue(context.getSharedPreferences("recording_access", Context.MODE_PRIVATE).getAll().isEmpty());
         }
     }
 
