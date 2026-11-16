@@ -10,6 +10,7 @@ import android.bluetooth.BluetoothManager;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.ContentResolver;
 import android.content.pm.PackageManager;
 import android.graphics.Typeface;
@@ -56,8 +57,9 @@ public final class MainActivity extends Activity {
     private static final class Session {
         MokukuConnection connection;
         String route = "home";
-        String wifiName = "";
-        String remoteUrl = "";
+        String wifiName;
+        String wifiPassword;
+        String remoteUrl;
         String speed = "";
         String rpm = "";
         String fuel = "";
@@ -102,6 +104,10 @@ public final class MainActivity extends Activity {
         if (session == null) {
             session = new Session();
             session.connection = new MokukuConnection(this);
+            SharedPreferences sources = updateSourcePreferences();
+            session.wifiName = sources.getString("wifi_name", "");
+            session.wifiPassword = sources.getString("wifi_password", "");
+            session.remoteUrl = sources.getString("remote_url", "");
             if (savedInstanceState != null) session.route = savedInstanceState.getString("route", "home");
         }
         snapshot = session.connection.snapshot();
@@ -156,7 +162,10 @@ public final class MainActivity extends Activity {
     }
 
     private void captureDrafts() {
-        if (wifiName != null) session.wifiName = wifiName.getText().toString();
+        if (wifiName != null) {
+            session.wifiName = wifiName.getText().toString();
+            session.wifiPassword = wifiPassword.getText().toString();
+        }
         if (remoteUrl != null) session.remoteUrl = remoteUrl.getText().toString();
         if (speed != null) {
             session.speed = speed.getText().toString();
@@ -462,6 +471,11 @@ public final class MainActivity extends Activity {
         updateVersions();
     }
 
+    // The last Wi-Fi and remote URL saved to a device, restored on the next launch.
+    private SharedPreferences updateSourcePreferences() {
+        return getSharedPreferences("update_sources", MODE_PRIVATE);
+    }
+
     private void updateSources() {
         LinearLayout wifi = ui.card(content);
         wifi.addView(ui.text("Wi-Fi", 18, R.color.text_primary));
@@ -469,6 +483,7 @@ public final class MainActivity extends Activity {
         wifiName = field(wifi, "Wi-Fi name", "Enter network name", InputType.TYPE_CLASS_TEXT);
         wifiName.setText(session.wifiName);
         wifiPassword = passwordField(wifi, "Wi-Fi password", "Enter network password");
+        wifiPassword.setText(session.wifiPassword);
         Button reveal = ui.button("Show password", false, false);
         reveal.setOnClickListener(view -> {
             boolean hidden = wifiPassword.getTransformationMethod() != null;
@@ -479,15 +494,21 @@ public final class MainActivity extends Activity {
         deviceControls.add(reveal);
         ui.fullButton(wifi, reveal);
         deviceButton(wifi, "Save Wi-Fi", true, false, () -> {
-            session.connection.saveWifi(wifiName.getText().toString(), wifiPassword.getText().toString());
-            wifiPassword.setText("");
+            String network = wifiName.getText().toString();
+            String password = wifiPassword.getText().toString();
+            updateSourcePreferences().edit().putString("wifi_name", network).putString("wifi_password", password).apply();
+            session.connection.saveWifi(network, password);
         });
         LinearLayout remote = ui.card(content);
         remote.addView(ui.text("Remote URL", 18, R.color.text_primary));
         remote.addView(ui.muted("Choose where updates come from."));
         remoteUrl = field(remote, "Remote base URL", "https://updates.example.com/mokuku/", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         remoteUrl.setText(session.remoteUrl);
-        deviceButton(remote, "Save remote URL", true, false, () -> session.connection.saveUrl(remoteUrl.getText().toString().trim()));
+        deviceButton(remote, "Save remote URL", true, false, () -> {
+            String url = remoteUrl.getText().toString().trim();
+            updateSourcePreferences().edit().putString("remote_url", url).apply();
+            session.connection.saveUrl(url);
+        });
     }
 
     private void mokukuIIUpdates() {

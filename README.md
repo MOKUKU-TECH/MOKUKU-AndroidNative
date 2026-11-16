@@ -29,7 +29,8 @@ see [MOKUKU II](#mokuku-ii).
   permission on Android 12+, or location permission/services on Android 6–11.
 - **Simulation:** send left/right clicks or toggle eye mode from Home, and set the
   speed, RPM, and fuel shown on the panels. OBD or GPS data can replace them.
-- **Tools → Updates:** save Wi-Fi and the remote URL independently; request
+- **Tools → Updates:** save Wi-Fi and the remote URL independently; the app
+  refills the last saved values on its next launch. Request
   firmware OTA, voice-model OTA, meme updates, or per-eye rollback. Complete the
   right-eye update before confirming a left-eye update. Reconnect after the device
   finishes and refresh versions; command acceptance is not update completion.

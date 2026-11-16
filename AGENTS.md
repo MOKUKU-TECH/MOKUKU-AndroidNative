@@ -79,7 +79,8 @@ Collect recording access codes through the masked Data Collection dialog. Keep
 them in app-private preferences per BLE device address and reuse them after reconnect
 or app restart. Exclude these preferences from backup and device transfer. Provide
 **Change access code** and **Forget access code**; forgetting keeps downloaded files.
-Do not compile codes into APKs or require build/CI secrets. Keep file transfer
+The last saved Wi-Fi name, password, and remote URL follow the same app-private,
+backup-excluded rule. Do not compile codes into APKs or require build/CI secrets. Keep file transfer
 and storage work off the UI thread and preserve queued GATT operation ordering.
 
 For Android or build configuration changes, run the build helper. For prototype

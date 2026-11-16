@@ -2,8 +2,10 @@
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="sharedpref" path="recording_access.xml" />
+        <exclude domain="sharedpref" path="update_sources.xml" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="sharedpref" path="recording_access.xml" />
+        <exclude domain="sharedpref" path="update_sources.xml" />
     </device-transfer>
 </data-extraction-rules>
