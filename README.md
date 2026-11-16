@@ -35,6 +35,8 @@ It supports the original MOKUKU only.
 - **Data Collection:** refresh returned recordings, download one at a time,
   delete a file, or clear device recordings. Enter the device access code in
   **Recording access** first. Deletion first requests recording stop.
+  Downloads show byte progress, average speed, and approximate time remaining
+  after an initial estimation period.
   Complete downloads are kept inside the app; **Save to phone** opens Android's
   location picker. Device deletion keeps these copies. Cancel/disconnect discards
   only an unfinished download; start it again to retry.

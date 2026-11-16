@@ -23,7 +23,9 @@ Native Android previews, rendered with Robolectric in the disconnected state:
 [Data Collection](previews/native-records.png), and [320 dp Data Collection](previews/native-records-small.png).
 Blank access-code dialogs: [390 dp](previews/native-access-code.png),
 [320 dp](previews/native-access-code-small.png).
-These validate layout only; they do not demonstrate a hardware connection.
+Sample download-progress previews: [390 dp](previews/native-download.png),
+[320 dp](previews/native-download-small.png). These use simulated transfer values.
+All native previews validate layout only; they do not demonstrate a hardware connection.
 
 ## Direction: quiet technology
 
@@ -170,7 +172,11 @@ firmware also returns an empty listing when opening the directory fails; use
 of every file. Deleting only the initial, potentially partial listing is insufficient.
 
 Download one file at a time. Show received/total bytes and progress once the file
-open reply supplies its size. A completed file is available through Android's save
+open reply supplies its size. Below the byte count, show average payload speed in
+B/s, KiB/s, or MiB/s and approximate time remaining. Use elapsed monotonic time from
+the first read request; show **Estimating speed and time remaining…** until at least
+one second has elapsed and data has arrived. Reset estimates for each download;
+rotation preserves the current transfer. A completed file is available through Android's save
 or share flow. Only show **Saved to phone** after saving succeeds. Cancellation or
 disconnect leaves the file retryable and must not label a partial file as complete.
 

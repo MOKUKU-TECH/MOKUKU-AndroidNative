@@ -64,6 +64,7 @@ final class MokukuConnection {
         final String operation;
         final long received;
         final long total;
+        final long downloadElapsedMilliseconds;
         final List<Device> devices;
         final Map<Integer, String> information;
         final Map<Integer, String> errors;
@@ -83,6 +84,8 @@ final class MokukuConnection {
             operation = connection.operation;
             received = connection.received;
             total = connection.total;
+            downloadElapsedMilliseconds = total > 0
+                    ? Math.max(0, android.os.SystemClock.elapsedRealtime() - connection.downloadStartedAt) : 0;
             devices = Collections.unmodifiableList(new ArrayList<>(connection.devices.values()));
             information = Collections.unmodifiableMap(new HashMap<>(connection.information));
             errors = Collections.unmodifiableMap(new HashMap<>(connection.errors));
@@ -140,6 +143,7 @@ final class MokukuConnection {
     private long total;
     private long fileKey;
     private long lastProgressUpdate;
+    private long downloadStartedAt;
     private final Runnable scanTimeout = this::stopScanOnWorker;
     private final Runnable connectionTimeout = () -> disconnectOnWorker("Connection timed out. Try again.");
     private final Runnable requestTimeout = () -> disconnectOnWorker("MOKUKU did not reply. Reconnect and try again; recording queries may exceed the firmware's Bluetooth response limit.");
@@ -659,6 +663,8 @@ final class MokukuConnection {
                             if (total > directory.getUsableSpace()) throw new IOException("Not enough free phone storage.");
                             partial = File.createTempFile("download-", ".partial", directory);
                             output = new FileOutputStream(partial);
+                            downloadStartedAt = android.os.SystemClock.elapsedRealtime();
+                            lastProgressUpdate = downloadStartedAt;
                             publish();
                             readChunk(id, name);
                         } catch (IOException | IllegalArgumentException exception) { endOperation(exception.getMessage()); }
@@ -709,6 +715,7 @@ final class MokukuConnection {
         operationCancellable = false;
         received = 0;
         total = 0;
+        downloadStartedAt = 0;
         report(result == null ? "Operation could not be completed." : result);
     }
 

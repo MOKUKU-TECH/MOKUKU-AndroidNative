@@ -673,7 +673,7 @@ public final class MainActivity extends Activity {
         if (progress == null) return;
         progress.setIndeterminate(snapshot.total == 0);
         if (snapshot.total > 0) progress.setProgress((int) (100 * snapshot.received / snapshot.total));
-        progressText.setText(snapshot.total == 0 ? "Waiting for device reply…" : snapshot.received + " / " + snapshot.total + " bytes");
+        progressText.setText(Ui.downloadProgressText(snapshot.received, snapshot.total, snapshot.downloadElapsedMilliseconds));
     }
 
     private void saveFile(File source, String name) {

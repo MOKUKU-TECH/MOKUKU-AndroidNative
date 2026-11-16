@@ -13,6 +13,7 @@ import android.widget.Button;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import java.util.Locale;
 
 final class Ui {
     private final Context context;
@@ -51,6 +52,23 @@ final class Ui {
     }
 
     TextView muted(String value) { return text(value, 14, R.color.text_secondary); }
+
+    static String downloadProgressText(long received, long total, long elapsedMilliseconds) {
+        if (total <= 0) return "Waiting for device reply…";
+        String bytes = received + " / " + total + " bytes";
+        if (received >= total) return bytes + "\nFinishing download…";
+        if (received <= 0 || elapsedMilliseconds < 1000) return bytes + "\nEstimating speed and time remaining…";
+        double bytesPerSecond = received * 1000.0 / elapsedMilliseconds;
+        String speed = bytesPerSecond >= 1024 * 1024
+                ? String.format(Locale.ROOT, "%.1f MiB/s", bytesPerSecond / (1024 * 1024))
+                : bytesPerSecond >= 1024
+                ? String.format(Locale.ROOT, "%.1f KiB/s", bytesPerSecond / 1024)
+                : String.format(Locale.ROOT, "%.1f B/s", bytesPerSecond);
+        long seconds = (long) Math.ceil((total - received) / bytesPerSecond);
+        String remaining = seconds >= 3600 ? seconds / 3600 + "h " + seconds % 3600 / 60 + "m " + seconds % 60 + "s"
+                : seconds >= 60 ? seconds / 60 + "m " + seconds % 60 + "s" : seconds + "s";
+        return bytes + "\nAverage speed: " + speed + "\nAbout " + remaining + " left";
+    }
 
     LinearLayout card(LinearLayout parent) {
         LinearLayout card = column();
