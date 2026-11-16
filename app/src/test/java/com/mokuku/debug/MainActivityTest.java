@@ -1,6 +1,9 @@
 package com.mokuku.debug;
 
 import android.view.View;
+import android.app.AlertDialog;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.EditText;
@@ -12,8 +15,12 @@ import org.robolectric.RobolectricTestRunner;
 import org.robolectric.android.controller.ActivityController;
 import org.robolectric.annotation.Config;
 import org.robolectric.util.ReflectionHelpers;
+import org.robolectric.shadows.ShadowAlertDialog;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import static org.junit.Assert.*;
+import static org.robolectric.Shadows.shadowOf;
 
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = {23, 35})
@@ -71,6 +78,44 @@ public class MainActivityTest {
             assertNotNull(find(activity.findViewById(R.id.content), "Remote URL"));
             assertEquals("", input(activity.findViewById(R.id.content), "Wi-Fi password").getText().toString());
             assertNotNull(find(activity.findViewById(R.id.content), "Save Wi-Fi"));
+        }
+    }
+
+    @Test public void recordingAccessDialogMasksValidatesAndClearsCanceledInput() throws Exception {
+        try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class).setup()) {
+            MainActivity activity = controller.get();
+            Object session = ReflectionHelpers.getField(activity, "session");
+            MokukuConnection connection = ReflectionHelpers.getField(session, "connection");
+            CountDownLatch initialized = new CountDownLatch(1);
+            ReflectionHelpers.<Handler>getField(connection, "worker").post(initialized::countDown);
+            assertTrue(initialized.await(5, TimeUnit.SECONDS));
+            shadowOf(Looper.getMainLooper()).idle();
+            ReflectionHelpers.setField(connection, "ready", true);
+            ReflectionHelpers.callInstanceMethod(activity, "changed", ReflectionHelpers.ClassParameter.from(
+                    MokukuConnection.Snapshot.class, new MokukuConnection.Snapshot(connection)));
+            ((ViewGroup) activity.findViewById(R.id.navigation)).getChildAt(1).performClick();
+            click(find(activity.findViewById(R.id.content), "Enter access code"));
+            shadowOf(Looper.getMainLooper()).idle();
+            AlertDialog dialog = ShadowAlertDialog.getLatestAlertDialog();
+            EditText code = input(dialog.getWindow().getDecorView(), "Recording access code");
+            assertNotNull(code.getTransformationMethod());
+            assertFalse(code.isSaveEnabled());
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
+            assertTrue(dialog.isShowing());
+            assertNotNull(code.getError());
+            code.setText("sample-code");
+            find(dialog.getWindow().getDecorView(), "Show access code").performClick();
+            assertNull(code.getTransformationMethod());
+            dialog.getButton(AlertDialog.BUTTON_NEGATIVE).performClick();
+            shadowOf(Looper.getMainLooper()).idle();
+            assertFalse(dialog.isShowing());
+            assertEquals("", code.getText().toString());
+            assertEquals("", ReflectionHelpers.getField(connection, "recordingAccessCode"));
+            click(find(activity.findViewById(R.id.content), "Enter access code"));
+            dialog = ShadowAlertDialog.getLatestAlertDialog();
+            assertEquals("", input(dialog.getWindow().getDecorView(), "Recording access code").getText().toString());
+            controller.recreate();
+            assertFalse(dialog.isShowing());
         }
     }
 

@@ -46,8 +46,9 @@ still needs firmware or hardware verification rather than guessing.
   contrast, system font scaling, reduced motion, and Android Back behavior.
 - Wi-Fi credentials and the remote URL have separate forms, save buttons,
   validation, and feedback. Changing one must not require completing the other.
-- Show device information only after it is received. Distinguish cached values,
-  unavailable information, command acceptance, and verified completion.
+- Show device information only after it is received. Clear device values, query
+  errors, and the returned recording list on disconnect; preserve downloaded phone
+  copies. Distinguish unavailable information, command acceptance, and verified completion.
 - Preserve right-eye-first update ordering. Require confirmation for rollback,
   per-file deletion, and clearing all recordings. Device deletion keeps phone copies.
 - Do not invent recording dates, sizes, or complete-list guarantees from a
@@ -70,9 +71,10 @@ This runs `:app:assembleDebug`, `:app:testDebugUnitTest`, and `:app:lintDebug`, 
 `./scripts/build.sh --install`. Docker is optional for Android builds; firmware
 container instructions in the parent repository concern firmware changes.
 
-Supply legacy recording access through the `MOKUKU_ACCESS_CODE` build environment
-and matching Actions secret. Do not commit its value. Keep file transfer and
-storage work off the UI thread and preserve queued GATT operation ordering.
+Collect recording access codes through the masked Data Collection dialog. Keep
+them in memory for the current connection and clear them on disconnect. Do not
+persist them, compile them into APKs, or require build/CI secrets. Keep file transfer
+and storage work off the UI thread and preserve queued GATT operation ordering.
 
 For Android or build configuration changes, run the build helper. For prototype
 JavaScript changes, run `node --check design/app.js` and exercise the affected

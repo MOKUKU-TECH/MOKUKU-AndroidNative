@@ -1,7 +1,24 @@
 # MOKUKU Android Native
 
-Native Android debug app for MOKUKU, using the Java/XML and Gradle structure of
-`MobiliAndroidHUD`. It connects to the original ESP32-S3 MOKUKU over BLE.
+A calm, dark Android companion for the original two-eye ESP32-S3 MOKUKU. Connect
+over Bluetooth LE to inspect device information, download and manage recordings,
+try eye interactions, and send update or debug commands.
+
+Four tabs keep the app easy to explore: **Home**, **Data Collection**, **Trips**
+(coming later), and **Tools**, where Updates and Debug live. Muted mint accents,
+soft slate cards, and generous spacing follow the approved companion design.
+
+| Home | Data Collection |
+|---|---|
+| <img src="design/previews/native-home.png" width="300" alt="Native Home page with discovery and device information cards" /> | <img src="design/previews/native-records.png" width="300" alt="Native Data Collection page with recording access and file controls" /> |
+
+Native Android renders show the disconnected state; device values populate after
+connection. See [Tools](design/previews/native-tools.png),
+[Updates](design/previews/native-updates.png), and the
+[access-code dialog](design/previews/native-access-code.png) for more screens.
+
+The app uses native Java/XML and the Gradle structure of `MobiliAndroidHUD`.
+It supports the original MOKUKU only.
 
 ## Use the app
 
@@ -16,7 +33,8 @@ Native Android debug app for MOKUKU, using the Java/XML and Gradle structure of
 - **Tools → Debug:** request OBD on/off, enable debug logging, set date/time, and
   start/stop recording. The firmware does not report OBD, mode, or recording state.
 - **Data Collection:** refresh returned recordings, download one at a time,
-  delete a file, or clear device recordings. Deletion first requests recording stop.
+  delete a file, or clear device recordings. Enter the device access code in
+  **Recording access** first. Deletion first requests recording stop.
   Complete downloads are kept inside the app; **Save to phone** opens Android's
   location picker. Device deletion keeps these copies. Cancel/disconnect discards
   only an unfinished download; start it again to retry.
@@ -33,17 +51,18 @@ empty result can also mean the directory could not be opened. The app reports
 deleted. An oversized notification can time out; reconnect and retry. Hardware
 validation is still required for BLE, date/time, OTA, and SD operations.
 
-## Recording access configuration
+Device information and the returned recording list are cleared on disconnect;
+downloaded phone copies remain available.
 
-The original firmware gates recording access behind its developer exchange.
-Supply its existing access code through the `MOKUKU_ACCESS_CODE` environment
-variable when building. Do not commit the code or put it in logs. For CI, configure
-the repository Actions secret with the same name. A build without the value still
-supports device information/settings/controls, but recording operations report
-that access is not configured.
+## Recording access
 
-The code is compiled into the APK so the exchange stays behind the scenes; build
-configuration keeps it out of source control and does not make the APK a secret store.
+Connect, open **Data Collection → Enter access code**, and choose **Use code** to
+load recordings. Input is masked with an optional reveal control. The code stays
+in memory for the current connection, including screen rotation, and is cleared on
+disconnect or app exit. It is not saved on the phone or compiled into the APK.
+Use **Change access code** to retry. The firmware does not acknowledge code
+acceptance; a wrong code can make file requests time out. No Actions secret or
+special build configuration is needed.
 
 ## App design
 

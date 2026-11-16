@@ -19,7 +19,10 @@ and [Trips](previews/trips.png).
 
 Native Android previews, rendered with Robolectric in the disconnected state:
 [Home](previews/native-home.png), [320 dp Home](previews/native-home-small.png),
-[Tools](previews/native-tools.png), and [Updates](previews/native-updates.png).
+[Tools](previews/native-tools.png), [Updates](previews/native-updates.png),
+[Data Collection](previews/native-records.png), and [320 dp Data Collection](previews/native-records-small.png).
+Blank access-code dialogs: [390 dp](previews/native-access-code.png),
+[320 dp](previews/native-access-code-small.png).
 These validate layout only; they do not demonstrate a hardware connection.
 
 ## Direction: quiet technology
@@ -89,8 +92,9 @@ Meme versions may appear under Updates. Avoid a generic “healthy” or “up t
 claim: these cannot be inferred from a successful BLE connection or version query.
 
 Place a **Simulation** shortcut below the overview. **Tools**, the fourth tab,
-contains spacious **Updates** and **Debug** shortcuts. Device actions become unavailable after disconnect; cached values
-remain visible with **Last received** labeling until a new query succeeds.
+contains spacious **Updates** and **Debug** shortcuts. On disconnect, disable device
+actions and clear device values, query errors, and returned filenames. Keep completed
+phone downloads available.
 
 ## Tools → Updates
 
@@ -138,6 +142,14 @@ refreshed after stopping. Command acknowledgement alone does not verify that a
 recording file was created.
 
 ## Data Collection
+
+Place a **Recording access** card above the file controls. **Enter access code**
+opens a masked dialog with optional reveal and **Use code** / **Cancel** actions.
+Using a code refreshes recordings; label it **Code entered**, without claiming
+authentication succeeded. **Change access code** opens a blank field. Keep the code
+in memory through navigation/rotation, then clear it on disconnect or app exit.
+Never include entered codes in previews. The browser prototype remains a sample-data
+reference; this access dialog is implemented in the native app.
 
 Show SD free/total space, **Refresh**, and the filenames returned from
 `/sd/record`. The directory API returns names only: do not invent recording dates,

@@ -37,8 +37,6 @@ jobs:
       - name: Install Android SDK packages
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
       - name: Build, test, and lint
-        env:
-          MOKUKU_ACCESS_CODE: ${{ secrets.MOKUKU_ACCESS_CODE }}
         run: ./scripts/build.sh
       - uses: actions/upload-artifact@v4
         with:

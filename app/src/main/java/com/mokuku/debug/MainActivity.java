@@ -83,6 +83,7 @@ public final class MainActivity extends Activity {
     private TextView progressText;
     private ProgressBar progress;
     private AlertDialog discovery;
+    private AlertDialog recordingAccess;
     private LinearLayout discoveryResults;
     private TextView discoveryStatus;
     private final Map<String, Button> discoveryDevices = new HashMap<>();
@@ -137,6 +138,7 @@ public final class MainActivity extends Activity {
 
     @Override protected void onDestroy() {
         session.connection.setListener(null);
+        if (recordingAccess != null) recordingAccess.dismiss();
         if (discovery != null) {
             discovery.setOnDismissListener(null);
             discovery.dismiss();
@@ -173,12 +175,13 @@ public final class MainActivity extends Activity {
         ((InputMethodManager) getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(content.getWindowToken(), 0);
         session.route = route;
         render();
-        if ("records".equals(route) && snapshot.connected && !snapshot.busy) session.connection.refreshRecordings();
+        if ("records".equals(route) && snapshot.connected && snapshot.hasRecordingAccessCode && !snapshot.busy) session.connection.refreshRecordings();
     }
 
     private void changed(MokukuConnection.Snapshot update) {
         MokukuConnection.Snapshot previous = snapshot;
         snapshot = update;
+        if (!update.connected && recordingAccess != null) recordingAccess.dismiss();
         feedback.setText(update.message);
         if (discovery != null && discovery.isShowing()) {
             if (update.connecting || update.connected) discovery.dismiss();
@@ -201,7 +204,6 @@ public final class MainActivity extends Activity {
         }
         updateVersions();
         updateControls();
-        if (!previous.connected && update.connected && "records".equals(session.route)) session.connection.refreshRecordings();
     }
 
     private void render() {
@@ -335,7 +337,6 @@ public final class MainActivity extends Activity {
         });
         ui.fullButton(device, connect);
         section("Device overview");
-        if (!snapshot.connected && !snapshot.information.isEmpty()) content.addView(ui.muted("Last received · reconnect to refresh."));
         String[] versions = information(3).split("/", -1);
         LinearLayout firstRow = overviewRow();
         overview(overviewColumn(firstRow, true), "Software", versions.length == 2 ? "Left · INS\n" + versions[0] + "\nRight · AI\n" + versions[1] : information(3), 3);
@@ -436,8 +437,7 @@ public final class MainActivity extends Activity {
         wifi.addView(ui.muted("MOKUKU downloads updates over Wi-Fi."));
         wifiName = field(wifi, "Wi-Fi name", "Enter network name", InputType.TYPE_CLASS_TEXT);
         wifiName.setText(session.wifiName);
-        wifiPassword = field(wifi, "Wi-Fi password", "Enter network password", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        if (Build.VERSION.SDK_INT >= 26) wifiPassword.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
+        wifiPassword = passwordField(wifi, "Wi-Fi password", "Enter network password");
         Button reveal = ui.button("Show password", false, false);
         reveal.setOnClickListener(view -> {
             boolean hidden = wifiPassword.getTransformationMethod() != null;
@@ -573,9 +573,19 @@ public final class MainActivity extends Activity {
             Button find = ui.button("Find MOKUKU", true, false);
             find.setOnClickListener(view -> findDevice());
             ui.fullButton(content, find);
+            ui.gap(content, 14);
         }
         overview(content, "MOKUKU storage", storageText(), 61);
-        deviceButton(content, "Refresh recordings", false, false, session.connection::refreshRecordings);
+        LinearLayout access = ui.card(content);
+        access.addView(ui.text("Recording access", 18, R.color.text_primary));
+        access.addView(ui.muted(snapshot.hasRecordingAccessCode
+                ? "Code entered for this connection. Cleared when you disconnect."
+                : "Enter your MOKUKU access code to load and manage recordings."));
+        deviceButton(access, snapshot.hasRecordingAccessCode ? "Change access code" : "Enter access code", false, false, this::enterRecordingAccessCode);
+        deviceButton(content, "Refresh recordings", false, false, () -> {
+            if (snapshot.hasRecordingAccessCode) session.connection.refreshRecordings();
+            else enterRecordingAccessCode();
+        });
         section("Returned recordings (" + snapshot.recordings.size() + ")");
         if (snapshot.busy) {
             LinearLayout active = ui.card(content);
@@ -598,7 +608,7 @@ public final class MainActivity extends Activity {
             TextView filename = ui.text(name, 15, R.color.text_primary);
             filename.setTypeface(Typeface.MONOSPACE);
             card.addView(filename);
-            card.addView(ui.muted(snapshot.connected ? "On MOKUKU · device recording" : "Last returned · reconnect to refresh"));
+            card.addView(ui.muted("On MOKUKU · device recording"));
             deviceButton(card, "Download", false, false, () -> session.connection.download(name));
             deviceButton(card, "Delete from MOKUKU", false, true, () -> confirm("Delete device recording?", name + "\nRequests recording stop before deleting. Phone copies are kept.", "Delete", () -> session.connection.deleteRecording(name, false)));
         }
@@ -617,6 +627,46 @@ public final class MainActivity extends Activity {
                 ui.fullButton(card, save);
             }
         }
+    }
+
+    private EditText passwordField(LinearLayout parent, String label, String hint) {
+        EditText input = field(parent, label, hint, InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        if (Build.VERSION.SDK_INT >= 26) input.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
+        return input;
+    }
+
+    private void enterRecordingAccessCode() {
+        if (recordingAccess != null) return;
+        LinearLayout form = ui.column();
+        form.setPadding(ui.dp(24), 0, ui.dp(24), ui.dp(16));
+        EditText input = passwordField(form, "Recording access code", "Enter access code");
+        input.setSingleLine(true);
+        android.widget.CheckBox reveal = new android.widget.CheckBox(this);
+        reveal.setText("Show access code");
+        reveal.setMinHeight(ui.dp(48));
+        reveal.setOnCheckedChangeListener((button, checked) -> {
+            input.setTransformationMethod(checked ? null : android.text.method.PasswordTransformationMethod.getInstance());
+            input.setSelection(input.length());
+        });
+        form.addView(reveal);
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Recording access")
+                .setMessage("Use the access code for this MOKUKU. Kept in memory until disconnect.")
+                .setView(form).setNegativeButton("Cancel", null).setPositiveButton("Use code", null).create();
+        recordingAccess = dialog;
+        dialog.setOnShowListener(value -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
+            String code = input.getText().toString();
+            try {
+                MokukuProtocol.stringMessage(44, code, 255);
+                session.connection.setRecordingAccessCode(code);
+                dialog.dismiss();
+            } catch (IllegalArgumentException exception) { input.setError(exception.getMessage()); }
+        }));
+        dialog.setOnDismissListener(value -> {
+            input.setText("");
+            deviceControls.remove(input);
+            recordingAccess = null;
+        });
+        dialog.show();
     }
 
     private void updateProgress() {

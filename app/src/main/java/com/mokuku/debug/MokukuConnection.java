@@ -57,6 +57,7 @@ final class MokukuConnection {
         final boolean connecting;
         final boolean busy;
         final boolean cancellable;
+        final boolean hasRecordingAccessCode;
         final String name;
         final String address;
         final String message;
@@ -75,6 +76,7 @@ final class MokukuConnection {
             connecting = connection.gatt != null && !connected;
             busy = connection.operation != null;
             cancellable = connection.operationCancellable;
+            hasRecordingAccessCode = !connection.recordingAccessCode.isEmpty();
             name = connection.name;
             address = connection.address;
             message = connection.message;
@@ -127,6 +129,7 @@ final class MokukuConnection {
     private String name = "MOKUKU";
     private String address = "";
     private String message = "Find your MOKUKU to get started.";
+    private String recordingAccessCode = "";
     private String operation;
     private boolean operationCancellable;
     private boolean refreshingInformation;
@@ -269,6 +272,10 @@ final class MokukuConnection {
         requests.clear();
         if (active != null) failed.add(0, active);
         active = null;
+        information.clear();
+        errors.clear();
+        recordings.clear();
+        recordingAccessCode = "";
         endOperation(reason);
         for (Request request : failed) request.callback.complete(null, reason);
         report(reason);
@@ -409,6 +416,7 @@ final class MokukuConnection {
         refreshingInformation = true;
         for (int id : new int[] {3, 4, 5, 57, 61}) {
             request(MokukuProtocol.MESSAGE, new byte[] {(byte) id}, id, (reply, error) -> {
+                if (!ready) return;
                 if (error == null) {
                     try {
                         String value = id == 57 ? MokukuProtocol.voiceModel(reply) : MokukuProtocol.textReply(reply, id);
@@ -506,13 +514,24 @@ final class MokukuConnection {
         });
     }
 
+    void setRecordingAccessCode(String code) {
+        worker.post(() -> {
+            if (!canStart()) return;
+            try {
+                MokukuProtocol.stringMessage(44, code, 255);
+                recordingAccessCode = code;
+                refreshRecordings();
+            } catch (IllegalArgumentException exception) { report(exception.getMessage()); }
+        });
+    }
+
     private void authorize(Reply callback) {
-        if (BuildConfig.MOKUKU_ACCESS_CODE.isEmpty()) {
-            callback.complete(null, "Recording access is not configured in this build."); return;
+        if (recordingAccessCode.isEmpty()) {
+            callback.complete(null, "Enter an access code in Data Collection to access recordings."); return;
         }
         try {
-            request(MokukuProtocol.MESSAGE, MokukuProtocol.stringMessage(44, BuildConfig.MOKUKU_ACCESS_CODE, 255), -1, callback);
-        } catch (IllegalArgumentException exception) { callback.complete(null, "Recording access configuration is invalid in this build."); }
+            request(MokukuProtocol.MESSAGE, MokukuProtocol.stringMessage(44, recordingAccessCode, 255), -1, callback);
+        } catch (IllegalArgumentException exception) { callback.complete(null, "Enter a valid recording access code."); }
     }
 
     private void list(Reply callback) {

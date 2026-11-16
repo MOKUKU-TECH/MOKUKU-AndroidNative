@@ -12,12 +12,6 @@ android {
         targetSdk 35
         versionCode 1
         versionName '0.1.0'
-        buildConfigField 'String', 'MOKUKU_ACCESS_CODE', groovy.json.JsonOutput.toJson(
-                providers.environmentVariable('MOKUKU_ACCESS_CODE').orElse('').get())
-    }
-
-    buildFeatures {
-        buildConfig true
     }
 
     compileOptions {

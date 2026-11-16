@@ -40,10 +40,11 @@ Firmware handlers use strings as C strings in several places; the implementation
 must match the existing desktop client's framing and test against a physical device.
 
 File list, open/read, and delete require the existing developer authorization
-exchange on message ID 44. Use the reference client's session setup; do not invent
-a MOKUKU II set/get handshake or expose authorization internals as normal UI.
-Use the deployment's existing authorization value without putting it in logs or
-design screenshots.
+exchange on message ID 44. Collect the code in the native Data Collection dialog
+and keep it in memory for the current connection. ID 44 has no application reply;
+GATT write completion does not prove authorization. A rejected code can leave file
+requests unanswered. Do not invent a MOKUKU II set/get handshake or include codes in
+logs, previews, source, or build configuration.
 
 Set date/time by writing the existing 11-byte data packet on **Transfer Data**:
 `01 speed rpm_high rpm_low fuel timestamp_LE32 backlight command`.
