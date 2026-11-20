@@ -227,6 +227,10 @@ function syncCard() {
   return `<section class="card"><div class="card-heading"><span class="icon-tile">${icon("download")}</span><div><h3>${state.connected ? device.name : "Sync with MOKUKU"}</h3><p>${state.connected ? "Downloads the trips this phone doesn’t have yet." : "Connect to download new trips. Saved trips stay on this phone."}</p></div></div>${deviceButton(`${icon("refresh")} Sync trips`, "sync-trips", "primary full")}${deviceButton(`${icon("trash")} Delete older trips on MOKUKU`, "confirm-delete-trips", "danger full", 'style="margin-top:10px"')}</section>`;
 }
 
+function tripCount(count) {
+  return count === 1 ? "1 trip" : `${count} trips`;
+}
+
 function trips() {
   // The connected MOKUKU first, then the device with the newest trip.
   const connected = state.connected ? state.devices[0].address : null;
@@ -236,7 +240,7 @@ function trips() {
   const list = groups.length
     ? groups.map(({ device, trips }) => {
       const current = device.address === connected;
-      return `<section class="trip-group ${current ? "connected" : ""}"><div class="section-heading"><h3>${device.name} <span class="detail">(${trips.length})</span></h3>${current ? '<span class="connection online"><span></span>Connected</span>' : ""}</div><div class="detail mono trip-address">${device.address}</div><div class="trip-list">${trips.map(tripCard).join("")}</div></section>`;
+      return `<section class="trip-group ${current ? "connected" : ""}"><div class="section-heading"><h3>${device.name} <span class="detail">(${trips.length})</span></h3>${current ? '<span class="connection online"><span></span>Connected</span>' : ""}</div><div class="detail mono trip-address">${device.address}</div><div class="trip-list">${trips.map(tripCard).join("")}</div>${button(`${icon("trash")} Delete ${tripCount(trips.length)} from phone`, "confirm-delete-device-trips", "danger full", `data-address="${device.address}" style="margin-top:10px"`)}</section>`;
     }).join("")
     : `<section class="empty-state"><div class="trip-illustration" aria-hidden="true"><span class="orbit"></span><span class="orbit inner"></span>${icon("trips")}<span class="tiny-dot"></span></div><h2>No trips on<br>this phone yet.</h2><p>Connect to MOKUKU and sync. Trips are saved here, grouped by device.</p></section>`;
   return `<h1 class="greeting">Trips</h1><p class="description">Every drive with MOKUKU, kept on this phone.</p>${syncCard()}${list}`;
@@ -256,7 +260,8 @@ function trip() {
       <section class="card"><div class="label">${icon("software")} Average speed</div><div class="value">${Math.round(average)} <span class="detail">km/h</span></div></section>
       <section class="card"><div class="label">${icon("update")} Top speed</div><div class="value">${current.maximumKmh} <span class="detail">km/h</span></div><div class="detail">GPS speed</div></section>
     </div>
-    <p class="detail" style="margin:18px 4px">From <span class="mono">${current.name}</span> · recorded by MOKUKU from GPS fixes.</p>`;
+    <p class="detail" style="margin:18px 4px">From <span class="mono">${current.name}</span> · recorded by MOKUKU from GPS fixes.</p>
+    ${button(`${icon("trash")} Delete from phone`, "confirm-delete-phone-trip", "danger full")}`;
 }
 
 const pages = { home, updates, simulation, debug, records, trips, trip, tools };
@@ -471,6 +476,27 @@ const actions = {
   "delete-trips"() {
     closeSheet();
     toast("Preview: sync and delete demonstrated. No device trips were deleted.");
+  },
+  "confirm-delete-device-trips"(element) {
+    const device = state.devices.find((item) => item.address === element.dataset.address);
+    const count = state.trips.filter((trip) => trip.address === device.address).length;
+    state.deleteAddress = device.address;
+    openSheet(`Delete ${device.name}’s trips from this phone?`, `<p>${tripCount(count)} from <span class="mono">${device.address}</span>. Trips still on MOKUKU download again on the next sync.</p><div class="button-row">${button("Keep trips", "close-sheet")}${button("Delete", "delete-device-trips", "danger")}</div>`);
+  },
+  "delete-device-trips"() {
+    state.trips = state.trips.filter((trip) => trip.address !== state.deleteAddress);
+    closeSheet();
+    render();
+  },
+  "confirm-delete-phone-trip"() {
+    const device = state.devices.find((item) => item.address === state.trip.address);
+    openSheet("Delete this trip from the phone?", `<p><span class="mono">${state.trip.name}</span> from ${device.name}. If it is still on MOKUKU, the next sync downloads it again.</p><div class="button-row">${button("Keep trip", "close-sheet")}${button("Delete", "delete-phone-trip", "danger")}</div>`);
+  },
+  "delete-phone-trip"() {
+    state.trips = state.trips.filter((trip) => trip !== state.trip);
+    state.trip = null;
+    closeSheet();
+    navigate("trips");
   },
   "open-trip"(element) {
     state.trip = state.trips[Number(element.dataset.trip)];

@@ -57,8 +57,10 @@ see [MOKUKU II](#mokuku-ii).
   MOKUKU first. Open a trip to see its route on an OpenStreetMap map with distance,
   duration, and speeds. **Delete older trips on MOKUKU** syncs, then deletes every
   trip on MOKUKU's SD card except the latest; nothing is deleted if any trip fails to
-  sync. The original MOKUKU needs the recording access code. See [Trips](#trips) for
-  sync limits.
+  sync. **Delete from phone** on a trip, or **Delete N trips from phone** under a
+  device, removes phone copies, also while disconnected; trips still on MOKUKU download
+  again on the next sync. The original MOKUKU needs the recording access code. See
+  [Trips](#trips) for sync limits.
 
 The phone sends commands over BLE; MOKUKU itself downloads OTA assets over its
 configured Wi-Fi. The app uses the internet only for OpenStreetMap tiles, cached in

@@ -86,6 +86,49 @@ public class TripsPageTest {
         }
     }
 
+    @Test public void deletesPhoneTripsByTripAndByDevice() throws Exception {
+        TripStore store = new TripStore(RuntimeEnvironment.getApplication());
+        TripLogTest.savePhoneTrip(store, CONNECTED, "mokuku_73A1", 1, TripLogTest.sampleTrip(1794816300000L, 1, 60));
+        TripLogTest.savePhoneTrip(store, CONNECTED, "mokuku_73A1", 2, TripLogTest.sampleTrip(1794855600000L, 2, 60));
+        TripLogTest.savePhoneTrip(store, OTHER, "mokukuii_5C20", 5, TripLogTest.sampleTrip(1794903120000L, 3, 60));
+        TripLogTest.savePhoneTrip(store, OTHER, "mokukuii_5C20", 6, TripLogTest.sampleTrip(1794990120000L, 4, 60));
+        try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class).setup().visible()) {
+            MainActivity activity = controller.get();
+            Object session = ReflectionHelpers.getField(activity, "session");
+            shadowOf(Looper.getMainLooper()).idle();
+            ((ViewGroup) activity.findViewById(R.id.navigation)).getChildAt(2).performClick();
+            waitForTrips(session);
+
+            // The newest trip is the other device's trip_6.bin.
+            findDescription(activity.findViewById(R.id.content), "Trip on ").performClick();
+            find(activity.findViewById(R.id.content), "Delete from phone").performClick();
+            confirmDialog();
+            waitFor(activity, "mokukuii_5C20 (1)", true);
+            assertEquals(java.util.Arrays.asList(5), store.numbers(OTHER));
+
+            find(activity.findViewById(R.id.content), "Delete 2 trips from phone").performClick();
+            confirmDialog();
+            waitFor(activity, "mokuku_73A1 (2)", false);
+            assertNotNull(find(activity.findViewById(R.id.content), "mokukuii_5C20 (1)"));
+            assertTrue(store.numbers(CONNECTED).isEmpty());
+            assertEquals(1, store.load().size());
+        }
+    }
+
+    private static void confirmDialog() {
+        android.app.AlertDialog dialog = (android.app.AlertDialog) org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog();
+        dialog.getButton(android.content.DialogInterface.BUTTON_POSITIVE).performClick();
+        shadowOf(Looper.getMainLooper()).idle();
+    }
+
+    private static void waitFor(MainActivity activity, String text, boolean shown) throws Exception {
+        for (int i = 0; i < 100 && (find(activity.findViewById(R.id.content), text) != null) != shown; i++) {
+            Thread.sleep(20);
+            shadowOf(Looper.getMainLooper()).idle();
+        }
+        assertEquals(text, shown, find(activity.findViewById(R.id.content), text) != null);
+    }
+
     private static void waitForTrips(Object session) throws Exception {
         for (int i = 0; i < 100 && ReflectionHelpers.getField(session, "trips") == null; i++) {
             Thread.sleep(20);

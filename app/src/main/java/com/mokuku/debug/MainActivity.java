@@ -31,6 +31,7 @@ import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.Toast;
 import android.window.OnBackInvokedCallback;
 import android.window.OnBackInvokedDispatcher;
 
@@ -953,6 +954,40 @@ public final class MainActivity extends Activity {
         group.addView(address);
         ui.gap(group, 10);
         for (TripStore.Trip trip : device.trips) tripRow(group, trip, connected);
+        String count = device.trips.size() == 1 ? "1 trip" : device.trips.size() + " trips";
+        phoneDeleteButton(group, "Delete " + count + " from phone", () -> confirm("Delete " + device.name + "’s trips from this phone?",
+                count + " from " + device.address + ". Trips still on MOKUKU download again on the next sync.", "Delete",
+                () -> deletePhoneTrips(store -> store.deleteDevice(device.address), null)));
+        ui.gap(group, 10);
+    }
+
+    private interface TripDeletion { void delete(TripStore store) throws IOException; }
+
+    // Phone trips can be deleted while disconnected, but not while a sync is saving trips.
+    private void phoneDeleteButton(LinearLayout parent, String label, Runnable action) {
+        Button button = ui.button(label, false, true);
+        button.setOnClickListener(view -> action.run());
+        boolean syncing = MokukuConnection.TRIP_SYNC.equals(snapshot.operation);
+        button.setEnabled(!syncing);
+        button.setAlpha(syncing ? .45f : 1);
+        ui.fullButton(parent, button);
+    }
+
+    // On the trip loader's thread, so the reload that follows sees the deletion.
+    private void deletePhoneTrips(TripDeletion deletion, String then) {
+        Session current = session;
+        TripStore store = new TripStore(this);
+        Handler main = new Handler(Looper.getMainLooper());
+        current.tripLoader.execute(() -> {
+            try {
+                deletion.delete(store);
+            } catch (IOException exception) {
+                main.post(() -> { if (current.activity != null) Toast.makeText(current.activity, exception.getMessage(), Toast.LENGTH_LONG).show(); });
+            }
+        });
+        current.tripsRequestedVersion = -1;
+        if (then != null) navigate(then);
+        else loadTrips();
     }
 
     private static String tripStart(TripLog log, String skeleton) {
@@ -1015,6 +1050,9 @@ public final class MainActivity extends Activity {
         statistic(overviewColumn(second, true), "Average speed", Math.round(log.averageSpeedKmh()) + " km/h");
         statistic(overviewColumn(second, false), "Top GPS speed", Math.round(log.maximumGpsSpeedKmh) + " km/h");
         content.addView(ui.muted("From " + trip.file.getName() + " · " + log.pointCount() + " GPS points recorded by MOKUKU."));
+        phoneDeleteButton(content, "Delete from phone", () -> confirm("Delete this trip from the phone?",
+                trip.file.getName() + " from " + trip.deviceName + ". If it is still on MOKUKU, the next sync downloads it again.", "Delete",
+                () -> deletePhoneTrips(store -> store.delete(trip.file), "trips")));
     }
 
     private void statistic(LinearLayout parent, String title, String value) {

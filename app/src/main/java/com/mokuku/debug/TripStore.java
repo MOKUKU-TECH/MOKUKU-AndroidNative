@@ -87,6 +87,17 @@ final class TripStore {
         }
     }
 
+    /** Deletes one phone trip; its device stays listed while it has other trips. */
+    void delete(File trip) throws IOException {
+        if (trip.exists() && !trip.delete()) throw new IOException("Could not delete " + trip.getName() + ".");
+    }
+
+    /** Deletes every phone trip of the device and forgets its name. */
+    void deleteDevice(String address) throws IOException {
+        for (int number : numbers(address)) delete(file(address, number));
+        names.edit().remove(address).apply();
+    }
+
     static byte[] read(File file) throws IOException {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         try (InputStream input = new FileInputStream(file)) {

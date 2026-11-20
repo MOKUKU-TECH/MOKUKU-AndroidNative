@@ -399,12 +399,13 @@ public class MokukuConnectionTest {
                         else if (packet[0] == 3 && packet[1] == 10) {
                             int first = packet[2] & 0xff;
                             reply = cleared[0] || first == 3 ? "" : first == 0 ? "mobili_1.record,mobili_2.record" : "mobili_3.record";
-                            if (reply.isEmpty()) { listed.countDown(); done.countDown(); }
                         }
                         if (reply == null) return;
                         byte[] text = reply.getBytes(java.nio.charset.StandardCharsets.UTF_8);
                         messages.setValue(ByteBuffer.allocate(text.length + 3).put(packet[0]).put(packet[1]).put((byte) 0).put(text).array());
                         callback.onCharacteristicChanged(value, messages);
+                        // After delivery, so the test's worker drain also covers this reply.
+                        if (packet[0] == 3 && reply.isEmpty()) { listed.countDown(); done.countDown(); }
                     }
                 });
             });

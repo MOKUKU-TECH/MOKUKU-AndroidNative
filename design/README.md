@@ -215,7 +215,9 @@ added, or that the phone already has every trip.
 Below, group the phone's trips by device: a heading with the device name, trip count, and BLE
 address in monospace, then the trips newest first. The connected MOKUKU's group comes first,
 tinted mint with a **Connected** label; other devices follow by their newest trip. Each row is a button with a small route
-thumbnail, the local start date and time, and distance · duration. With no trips, show the
+thumbnail, the local start date and time, and distance · duration. Each group ends with
+**Delete N trips from phone** (destructive style), which confirms and removes that device's
+phone copies; it works disconnected but not during a sync. With no trips, show the
 empty state: **No trips on this phone yet**.
 
 Opening a trip shows the **Trip** subpage: the start date as the title, the start time and
@@ -223,7 +225,8 @@ device below it, then the route drawn on an OpenStreetMap map, fitted to the tri
 start ring and a warm end dot and a **Start** / **End** legend. The map pans and zooms and shows
 the OpenStreetMap attribution; without internet the route still draws over blank tiles. Below
 the map, a two-column grid shows distance, duration, average speed, and top GPS speed, then the
-source filename. Draw the route only from records whose CRC passes; a trip cut short by power
+source filename and **Delete from phone**, which confirms, deletes the phone copy, and returns
+to Trips. A deleted trip still on MOKUKU downloads again on the next sync. Draw the route only from records whose CRC passes; a trip cut short by power
 loss ends at its last good record.
 
 ## Implementation after design review

@@ -45,7 +45,8 @@ still needs firmware or hardware verification rather than guessing.
 - Keep four tabs: **Home**, **Data Collection**, **Trips**, and **Tools**.
   Simulation opens from Home; a trip's map opens from Trips; Updates and Debug open
   from Tools. Trips list phone copies grouped by device, the connected MOKUKU first;
-  syncing never deletes device or phone trips.
+  syncing never deletes device or phone trips; phone trips are deleted only from a
+  trip or device group.
 - Follow the charcoal/slate surfaces, muted mint accents, spacing, typography,
   and touch targets in the style guide. Preserve accessible labels, readable
   contrast, system font scaling, reduced motion, and Android Back behavior.
