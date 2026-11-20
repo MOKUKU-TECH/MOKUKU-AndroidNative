@@ -203,7 +203,10 @@ in app-private storage, so the Trips tab works offline and while disconnected.
 Place a sync card first. Connected, it names the device and offers **Sync trips**, which
 downloads every trip on MOKUKU that the phone does not have, plus the rest of the newest phone
 trip in case MOKUKU was still recording it. Syncing never deletes device or phone trips.
-Disconnected, the card says **Connect to download new trips** and disables the button. The
+Below it, **Delete older trips on MOKUKU** (destructive style) confirms, syncs, then deletes
+every trip on MOKUKU except the latest by number range; phone copies stay, and nothing is
+deleted if any trip fails to sync. Disconnected, the card says **Connect to download new trips**
+and disables both buttons. The
 original MOKUKU needs the Data Collection access code; without one, **Sync trips** opens the
 access-code dialog. While syncing, show **Trip 2 of 5** with the device filename, the
 download progress, and **Cancel**; trips already saved stay. Finish with how many trips were

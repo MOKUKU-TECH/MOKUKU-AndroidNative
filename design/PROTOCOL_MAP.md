@@ -37,6 +37,7 @@ clock-only time sync, as detailed below.
 | Download recording | File Command start `02 00`, offset LE32 `0`, path, CRC16 | Reply: size LE32, sector size LE32, prefix CRC16; then File Data sectors |
 | List trips | `3C len /sd/trip` (60) | Comma-separated `trip_<n>.bin` names. The reply is dropped, not truncated, once it exceeds MTU − 3 bytes (about 40 trips), so the app also probes `trip_<n+1>.bin` upward from the highest number it knows until a start is refused with status 2 |
 | Download trip | File Command start, offset LE32, `/sd/trip/trip_<n>.bin` | Offset = bytes the phone has; the reply's prefix CRC16 must match them, else keep the phone copy and skip |
+| Delete trips | `3A first_LE32 last_LE32` (58) | `3A 01` when done; deletes `trip_<n>.bin` from first to last except the trip recording. Needs the access code |
 
 Downloads use the sector file transfer shared with MOKUKU II (MobiliMOKUKU
 `doc/MOKUKU_II_BLE_CONTROL.md`). Each File Data packet is sector LE16, sequence
@@ -111,6 +112,7 @@ same sector transfer as above.
 | Download recording | File Command start `02 00`, `/sdcard/record/name` | No access code |
 | List trips | Get 10, first index LE16, `/sdcard/trip` | Paged like recordings; result 4 when the directory is missing (no trips yet) or no SD card |
 | Download trip | File Command start, offset LE32, `/sdcard/trip/trip_<n>.bin` | Same resume rule as the original |
+| Delete trips | Set 17, first LE32, last LE32 | As the original's message 58; result 4 without a card or when a file cannot be deleted |
 | Firmware update | File Command start `C8 00`, size LE32 | Reply: sector size LE32, packet size LE16; app sends each sector's packets on File Data and waits for its acknowledgement; MOKUKU II restarts after the last |
 
 MOKUKU II has no debug-log, date/time, recording start/stop, or meme-update

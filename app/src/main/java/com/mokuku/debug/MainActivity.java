@@ -904,10 +904,15 @@ public final class MainActivity extends Activity {
         card.addView(ui.text(snapshot.connected ? snapshot.name : "Sync with MOKUKU", 18, R.color.text_primary));
         card.addView(ui.muted(snapshot.connected ? "Downloads the trips this phone doesn’t have yet."
                 : "Connect to download new trips. Saved trips stay on this phone."));
-        deviceButton(card, "Sync trips", true, false, () -> {
-            if (snapshot.mokukuII || snapshot.hasRecordingAccessCode) session.connection.syncTrips();
-            else enterRecordingAccessCode();
-        });
+        deviceButton(card, "Sync trips", true, false, () -> syncTrips(false));
+        deviceButton(card, "Delete older trips on MOKUKU", false, true, () -> confirm("Delete older trips on MOKUKU?",
+                "MOKUKU syncs first, then deletes every trip on its SD card except the latest. Phone copies are kept. "
+                        + "If any trip fails to sync, nothing is deleted.", "Sync and delete", () -> syncTrips(true)));
+    }
+
+    private void syncTrips(boolean deleteOlder) {
+        if (snapshot.mokukuII || snapshot.hasRecordingAccessCode) session.connection.syncTrips(deleteOlder);
+        else enterRecordingAccessCode();
     }
 
     private void loadTrips() {

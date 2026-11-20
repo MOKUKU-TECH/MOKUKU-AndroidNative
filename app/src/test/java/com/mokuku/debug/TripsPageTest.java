@@ -57,6 +57,7 @@ public class TripsPageTest {
             assertTrue(position(content, "mokuku_73A1 (3)") < position(content, "mokukuii_5C20 (1)"));
             assertNotNull(find(content, "● Connected"));
             assertTrue(find(content, "Sync trips").isEnabled());
+            assertTrue(find(content, "Delete older trips on MOKUKU").isEnabled());
             save(activity.getWindow().getDecorView(), 0, "native-trips");
 
             ReflectionHelpers.setField(connection, "operation", MokukuConnection.TRIP_SYNC);

@@ -210,6 +210,9 @@ final class MokukuConnection {
     private int tripsAdded;
     private int tripsExtended;
     private final List<String> tripProblems = new ArrayList<>();
+    // The highest trip number MOKUKU has, and whether to delete its older trips after the sync.
+    private int tripsNewestOnDevice;
+    private boolean tripsDeleteOlder;
     private String tripStatus;
     private int tripsVersion;
     private byte[] firmwareImage;
@@ -782,7 +785,7 @@ final class MokukuConnection {
                 MokukuProtocol.stringMessage(44, code, 255);
                 recordingAccessPreferences.edit().putString(address, code).apply();
                 recordingAccessCode = code;
-                if (thenSyncTrips) syncTrips();
+                if (thenSyncTrips) syncTrips(false);
                 else refreshRecordings();
             } catch (IllegalArgumentException exception) { report(exception.getMessage()); }
         });
@@ -996,6 +999,7 @@ final class MokukuConnection {
         try {
             long[] started = MokukuProtocol.downloadStarted(frame);
             if (started == null) return;
+            tripsNewestOnDevice = Math.max(tripsNewestOnDevice, tripNumber);
             // A different prefix means MOKUKU reused the number (its counter was erased).
             if (tripNumber != 0 && started[2] != downloadPrefixCrc) { skipTrip(PHONE_COPY_KEPT); return; }
             if (tripNumber != 0 && started[0] == downloadOffset) { skipTrip(null); return; }
@@ -1203,8 +1207,11 @@ final class MokukuConnection {
         sendFirmwareSector();
     }
 
-    /** Downloads the trips this phone does not have, and the rest of its newest trip from this device. */
-    void syncTrips() {
+    /**
+     * Downloads the trips this phone does not have, and the rest of its newest trip from this device;
+     * then, with deleteOlder, deletes every trip on MOKUKU but the newest, unless a trip failed to sync.
+     */
+    void syncTrips(boolean deleteOlder) {
         worker.post(() -> {
             if (!canStart()) return;
             if (fileData == null) { report("Update MOKUKU's firmware to sync trips."); return; }
@@ -1212,7 +1219,8 @@ final class MokukuConnection {
             operationCancellable = true;
             received = 0;
             total = 0;
-            tripsPlanned = tripsFetched = tripsAdded = tripsExtended = 0;
+            tripsPlanned = tripsFetched = tripsAdded = tripsExtended = tripsNewestOnDevice = 0;
+            tripsDeleteOlder = deleteOlder;
             tripProblems.clear();
             tripProbing = false;
             tripStatus = "Looking for trips on " + name + "…";
@@ -1254,6 +1262,7 @@ final class MokukuConnection {
             if (number > 0 && !numbers.contains(number)) numbers.add(number);
         }
         Collections.sort(numbers);
+        if (!numbers.isEmpty()) tripsNewestOnDevice = numbers.get(numbers.size() - 1);
         if (numbers.contains(newest)) tripQueue.add(newest);
         for (int number : numbers) if (!saved.contains(number)) tripQueue.add(number);
         tripsPlanned = tripQueue.size();
@@ -1291,7 +1300,19 @@ final class MokukuConnection {
                 : "Synced " + name + ": " + added + (added == 1 ? " new trip" : " new trips")
                 + (extended == 0 ? "" : ", " + extended + " continued") + ".";
         if (!tripProblems.isEmpty()) result += " " + String.join("; ", tripProblems) + ".";
-        endOperation(result);
+        if (!tripsDeleteOlder) { endOperation(result); return; }
+        if (!tripProblems.isEmpty()) { endOperation(result + " Nothing was deleted, because not every trip synced."); return; }
+        int newest = tripsNewestOnDevice;
+        if (newest <= 1) { endOperation(result + " MOKUKU has no older trips to delete."); return; }
+        String synced = result;
+        tripStatus = "Deleting trips on " + name + "…";
+        publish();
+        int id = operationId;
+        send(MokukuProtocol.deleteTrips(mokukuII, 1, newest - 1), (reply, error) -> {
+            if (id != operationId) return;
+            endOperation(synced + (error == null ? " Deleted the trips on MOKUKU except " + TripStore.name(newest) + "."
+                    : " Deleting trips failed: " + error));
+        });
     }
 
     void cancelOperation() {

@@ -492,7 +492,7 @@ public class MokukuConnectionTest {
             peer.files.put(1, first);
             peer.files.put(2, second);
             peer.files.put(3, third);
-            connection.syncTrips();
+            connection.syncTrips(false);
             assertTrue(connection.snapshot().message, peer.ended.await(5, TimeUnit.SECONDS));
             onWorker(connection, () -> {});
             MokukuConnection.Snapshot snapshot = connection.snapshot();
@@ -516,7 +516,7 @@ public class MokukuConnectionTest {
             peer.files.put(5, fifth);
             peer.files.put(6, sixth);
             onWorker(connection, () -> ReflectionHelpers.setField(connection, "recordingAccessCode", "sample-code"));
-            connection.syncTrips();
+            connection.syncTrips(false);
             assertTrue(peer.listed.await(5, TimeUnit.SECONDS));
             onWorker(connection, () -> {});
             // The paused test clock never fires the listing's reply timeout.
@@ -530,6 +530,21 @@ public class MokukuConnectionTest {
         } finally { connection.close(); }
     }
 
+    @Test public void syncThenDeletesEveryDeviceTripButTheNewest() throws Exception {
+        MokukuConnection connection = connectedSession();
+        try {
+            TripPeer peer = new TripPeer(connection, true);
+            peer.files.put(2, pattern(120));
+            peer.files.put(3, pattern(140));
+            connection.syncTrips(true);
+            assertTrue(connection.snapshot().message, peer.ended.await(5, TimeUnit.SECONDS));
+            onWorker(connection, () -> {});
+            assertEquals(java.util.Collections.singletonList("1-2"), peer.deleted);
+            assertEquals(java.util.Collections.singleton(3), peer.files.keySet());
+            assertEquals("Synced MOKUKU: 2 new trips. Deleted the trips on MOKUKU except trip_3.bin.", connection.snapshot().message);
+        } finally { connection.close(); }
+    }
+
     @Test public void syncKeepsAPhoneTripThatDiffersFromTheDevice() throws Exception {
         MokukuConnection connection = connectedSession();
         try {
@@ -539,10 +554,13 @@ public class MokukuConnectionTest {
             TripLogTest.savePhoneTrip(store, "AA:BB:CC:DD:EE:FF", "MOKUKU", 1, phoneCopy);
             TripPeer peer = new TripPeer(connection, true);
             peer.files.put(1, pattern(200));
-            connection.syncTrips();
+            peer.files.put(2, pattern(200));
+            connection.syncTrips(true);
             assertTrue(peer.ended.await(5, TimeUnit.SECONDS));
             onWorker(connection, () -> {});
             assertTrue(connection.snapshot().message, connection.snapshot().message.contains("trip_1.bin differs from the phone copy, which was kept"));
+            assertTrue(connection.snapshot().message, connection.snapshot().message.endsWith("Nothing was deleted, because not every trip synced."));
+            assertTrue(peer.deleted.isEmpty());
             assertArrayEquals(phoneCopy, Files.readAllBytes(store.file("AA:BB:CC:DD:EE:FF", 1).toPath()));
         } finally { connection.close(); }
     }
@@ -552,6 +570,7 @@ public class MokukuConnectionTest {
         static final int SECTOR_SIZE = 100;
         final Map<Integer, byte[]> files = new java.util.TreeMap<>();
         final List<String> starts = new java.util.concurrent.CopyOnWriteArrayList<>();
+        final List<String> deleted = new java.util.concurrent.CopyOnWriteArrayList<>();
         final CountDownLatch listed = new CountDownLatch(1);
         final CountDownLatch ended = new CountDownLatch(1);
         final BluetoothGatt gatt;
@@ -585,6 +604,7 @@ public class MokukuConnectionTest {
                         if (characteristic == command) command(packet);
                         else if (characteristic == data) acknowledgement(packet);
                         else if (mokukuII && packet[0] == 3 && packet[1] == 10) list(messages, packet[2] & 0xff);
+                        else if (mokukuII && packet[0] == 2 && packet[1] == MokukuProtocol.PROPERTY_DELETE_TRIPS) deleteTrips(messages, packet);
                         else if (packet[0] == 60) listed.countDown();
                     }
                 });
@@ -596,6 +616,16 @@ public class MokukuConnectionTest {
             if (first == 0) for (int number : files.keySet()) names.append(names.length() == 0 ? "" : ",").append("trip_").append(number).append(".bin");
             byte[] text = names.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
             notify(messages, ByteBuffer.allocate(text.length + 3).put((byte) 3).put((byte) 10).put((byte) 0).put(text).array());
+        }
+
+        // Set 17: deletes trips first to last, as the firmware does.
+        private void deleteTrips(BluetoothGattCharacteristic messages, byte[] packet) {
+            ByteBuffer range = ByteBuffer.wrap(packet, 2, 8).order(ByteOrder.LITTLE_ENDIAN);
+            int first = range.getInt(), last = range.getInt();
+            deleted.add(first + "-" + last);
+            files.keySet().removeIf(number -> number >= first && number <= last);
+            notify(messages, new byte[] {2, (byte) MokukuProtocol.PROPERTY_DELETE_TRIPS, 0});
+            checkEnded();
         }
 
         private void command(byte[] frame) {

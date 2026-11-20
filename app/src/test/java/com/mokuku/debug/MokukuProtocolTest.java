@@ -61,6 +61,11 @@ public class MokukuProtocolTest {
         assertArrayEquals(new byte[] {2, 0, 1, 0, 3, 0}, MokukuProtocol.withoutCrc(MokukuProtocol.acknowledgement(2, 1, 3), 8));
     }
 
+    @Test public void encodesTripDeletionRanges() {
+        assertArrayEquals(new byte[] {58, 1, 0, 0, 0, 0x29, 1, 0, 0}, MokukuProtocol.deleteTrips(false, 1, 297));
+        assertArrayEquals(new byte[] {2, 17, 1, 0, 0, 0, 0x29, 1, 0, 0}, MokukuProtocol.deleteTrips(true, 1, 297));
+    }
+
     @Test public void decodesDownloadStartRepliesAndRefusals() throws Exception {
         assertArrayEquals(new long[] {1000, 4096, 0xbeef}, MokukuProtocol.downloadStarted(startReply(0, 1000, 4096)));
         assertThrows(IllegalStateException.class, () -> MokukuProtocol.downloadStarted(startReply(1, 0, 0)));

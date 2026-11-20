@@ -224,7 +224,7 @@ function syncCard() {
   if (state.sync) {
     return `<section class="card"><div class="card-heading"><span class="icon-tile">${icon("refresh")}</span><div><h3>Syncing trips</h3><p>Trip ${state.sync.index + 1} of ${state.sync.total} · ${state.deviceOnlyTrips[state.sync.index].name}</p></div></div><div class="download-progress"><progress id="sync-progress" value="${state.sync.progress}" max="100" aria-label="Sample sync progress"></progress><div class="download-status"><span id="sync-status">${state.sync.progress}% · sample transfer</span><button class="text-button" data-action="cancel-sync">Cancel</button></div></div></section>`;
   }
-  return `<section class="card"><div class="card-heading"><span class="icon-tile">${icon("download")}</span><div><h3>${state.connected ? device.name : "Sync with MOKUKU"}</h3><p>${state.connected ? "Downloads the trips this phone doesn’t have yet." : "Connect to download new trips. Saved trips stay on this phone."}</p></div></div>${deviceButton(`${icon("refresh")} Sync trips`, "sync-trips", "primary full")}</section>`;
+  return `<section class="card"><div class="card-heading"><span class="icon-tile">${icon("download")}</span><div><h3>${state.connected ? device.name : "Sync with MOKUKU"}</h3><p>${state.connected ? "Downloads the trips this phone doesn’t have yet." : "Connect to download new trips. Saved trips stay on this phone."}</p></div></div>${deviceButton(`${icon("refresh")} Sync trips`, "sync-trips", "primary full")}${deviceButton(`${icon("trash")} Delete older trips on MOKUKU`, "confirm-delete-trips", "danger full", 'style="margin-top:10px"')}</section>`;
 }
 
 function trips() {
@@ -465,6 +465,13 @@ const actions = {
   download(element) { download(element.dataset.file); },
   "sync-trips": syncTrips,
   "cancel-sync"() { cancelSync(); },
+  "confirm-delete-trips"() {
+    openSheet("Delete older trips on MOKUKU?", `<p>MOKUKU syncs first, then deletes every trip on its SD card except the latest. Phone copies are kept. If any trip fails to sync, nothing is deleted.</p><p class="detail">Design preview: no trips are deleted.</p><div class="button-row">${button("Keep trips", "close-sheet")}${button("Sync and delete", "delete-trips", "danger")}</div>`);
+  },
+  "delete-trips"() {
+    closeSheet();
+    toast("Preview: sync and delete demonstrated. No device trips were deleted.");
+  },
   "open-trip"(element) {
     state.trip = state.trips[Number(element.dataset.trip)];
     state.scroll.trip = 0;

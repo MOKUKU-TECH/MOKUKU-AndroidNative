@@ -150,6 +150,7 @@ final class MokukuProtocol {
     static final int PROPERTY_DELETE_RECORDINGS = 13;
     static final int PROPERTY_PANEL_ACTION = 15;
     static final int PROPERTY_FIRMWARE_SLOTS = 16;
+    static final int PROPERTY_DELETE_TRIPS = 17;
     static final int PROPERTY_ROLLBACK = 200;
     static final int MOKUKU_II_STRING_MAXIMUM_BYTES = 64;
 
@@ -161,6 +162,13 @@ final class MokukuProtocol {
         byte[] text = path.getBytes(StandardCharsets.UTF_8);
         return property(TYPE_GET, PROPERTY_DIRECTORY, ByteBuffer.allocate(text.length + 2)
                 .order(ByteOrder.LITTLE_ENDIAN).putShort((short) first).put(text).array());
+    }
+
+    /** Deletes MOKUKU's trips first to last (inclusive); MOKUKU keeps the trip it is recording. */
+    static byte[] deleteTrips(boolean mokukuII, int first, int last) {
+        ByteBuffer range = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putInt(first).putInt(last);
+        if (mokukuII) return property(TYPE_SET, PROPERTY_DELETE_TRIPS, range.array());
+        return ByteBuffer.allocate(9).put((byte) 58).put(range.array()).array();
     }
 
     /** The value of a MOKUKU II set/get reply; throws with the reason for a result other than OK. */
