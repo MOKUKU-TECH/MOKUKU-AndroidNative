@@ -31,10 +31,41 @@ const state = {
   connected: false,
   hasConnected: false,
   records: ["mobili_128.record", "mobili_127.record", "mobili_126.record"],
+  devices: [{ name: "mokuku_73A1", address: "A4:CF:12:6B:73:A1" }, { name: "mokukuii_5C20", address: "3C:84:27:C1:5C:22" }],
+  trips: [
+    sampleTrip("A4:CF:12:6B:73:A1", 41, "2026-11-18T08:12", 23, 12.4, 72, 7),
+    sampleTrip("A4:CF:12:6B:73:A1", 40, "2026-11-17T18:40", 31, 18.9, 96, 3),
+    sampleTrip("A4:CF:12:6B:73:A1", 39, "2026-11-17T08:05", 21, 11.8, 68, 11),
+    sampleTrip("3C:84:27:C1:5C:22", 6, "2026-11-19T14:22", 46, 27.3, 104, 5),
+  ],
+  // Sample trips the connected MOKUKU holds that the phone has not synced yet.
+  deviceOnlyTrips: [sampleTrip("A4:CF:12:6B:73:A1", 42, "2026-11-19T17:55", 34, 20.6, 88, 13), sampleTrip("A4:CF:12:6B:73:A1", 43, "2026-11-20T08:09", 25, 13.1, 75, 2)],
+  sync: null,
+  trip: null,
   downloaded: new Set(),
   transfer: null,
   scroll: {},
 };
+// A deterministic sample route: east/north meters from the trip's first point.
+function sampleRoute(seed, kilometers) {
+  let random = seed * 9301 + 49297;
+  const next = () => (random = (random * 9301 + 49297) % 233280) / 233280;
+  const points = [[0, 0]];
+  let heading = next() * Math.PI * 2;
+  const steps = 60;
+  for (let step = 0; step < steps; step++) {
+    if (step % 6 === 0) heading += (next() - .5) * 1.6;
+    const [east, north] = points[points.length - 1];
+    const length = kilometers * 1000 / steps;
+    points.push([east + Math.cos(heading) * length, north + Math.sin(heading) * length]);
+  }
+  return points;
+}
+
+function sampleTrip(address, number, start, minutes, kilometers, maximumKmh, seed) {
+  return { address, name: `trip_${number}.bin`, start: new Date(start), minutes, kilometers, maximumKmh, points: sampleRoute(seed, kilometers) };
+}
+
 const screen = document.getElementById("screen");
 const sheet = document.getElementById("sheet");
 let toastTimer;
@@ -159,17 +190,84 @@ function records() {
     <p class="detail centered">Removes device recordings. Phone copies are kept.</p>`;
 }
 
-function trips() {
-  return `<h1 class="greeting">Trips</h1><p class="description">There’s more down the road.</p><section class="empty-state"><div class="trip-illustration" aria-hidden="true"><span class="orbit"></span><span class="orbit inner"></span>${icon("trips")}<span class="tiny-dot"></span></div><h2>Your journeys,<br>all together.</h2><p>A place for the trips you make with MOKUKU. We’re saving this for a little later.</p><span class="coming-soon">Coming later</span></section>`;
+function tripDate(trip, withTime = true) {
+  return trip.start.toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", ...(withTime ? { hour: "2-digit", minute: "2-digit" } : {}) });
 }
 
-const pages = { home, updates, simulation, debug, records, trips, tools };
-const subpageNames = { updates: "Updates", simulation: "Simulation", debug: "Debug" };
+function duration(minutes) {
+  return minutes >= 60 ? `${Math.floor(minutes / 60)} h ${minutes % 60} min` : `${minutes} min`;
+}
+
+// The route scaled into a width × height box, north up, as SVG points.
+function routePoints(points, width, height, margin) {
+  const easts = points.map(([east]) => east), norths = points.map(([, north]) => north);
+  const left = Math.min(...easts), bottom = Math.min(...norths);
+  const span = Math.max(Math.max(...easts) - left, Math.max(...norths) - bottom, 1);
+  const scale = Math.min(width - 2 * margin, height - 2 * margin) / span;
+  const offsetX = (width - (Math.max(...easts) - left) * scale) / 2, offsetY = (height - (Math.max(...norths) - bottom) * scale) / 2;
+  return points.map(([east, north]) => [offsetX + (east - left) * scale, height - offsetY - (north - bottom) * scale]);
+}
+
+function routeSvg(trip, width, height, margin, className) {
+  const points = routePoints(trip.points, width, height, margin);
+  const [start, end] = [points[0], points[points.length - 1]];
+  return `<svg class="${className}" viewBox="0 0 ${width} ${height}" aria-hidden="true"><polyline points="${points.map((point) => point.map((value) => value.toFixed(1)).join(",")).join(" ")}"/><circle class="route-start" cx="${start[0]}" cy="${start[1]}" r="${className === "route-map" ? 7 : 3}"/><circle class="route-end" cx="${end[0]}" cy="${end[1]}" r="${className === "route-map" ? 7 : 3}"/></svg>`;
+}
+
+function tripCard(trip) {
+  const index = state.trips.indexOf(trip);
+  return `<button class="trip-card" data-action="open-trip" data-trip="${index}" aria-label="Trip on ${tripDate(trip)}, ${trip.kilometers} kilometers, ${duration(trip.minutes)}">${routeSvg(trip, 64, 64, 8, "route-thumbnail")}<span class="trip-summary"><strong>${tripDate(trip)}</strong><span class="detail">${trip.kilometers.toFixed(1)} km · ${duration(trip.minutes)}</span></span>${icon("arrow")}</button>`;
+}
+
+function syncCard() {
+  const device = state.devices[0];
+  if (state.sync) {
+    return `<section class="card"><div class="card-heading"><span class="icon-tile">${icon("refresh")}</span><div><h3>Syncing trips</h3><p>Trip ${state.sync.index + 1} of ${state.sync.total} · ${state.deviceOnlyTrips[state.sync.index].name}</p></div></div><div class="download-progress"><progress id="sync-progress" value="${state.sync.progress}" max="100" aria-label="Sample sync progress"></progress><div class="download-status"><span id="sync-status">${state.sync.progress}% · sample transfer</span><button class="text-button" data-action="cancel-sync">Cancel</button></div></div></section>`;
+  }
+  return `<section class="card"><div class="card-heading"><span class="icon-tile">${icon("download")}</span><div><h3>${state.connected ? device.name : "Sync with MOKUKU"}</h3><p>${state.connected ? "Downloads the trips this phone doesn’t have yet." : "Connect to download new trips. Saved trips stay on this phone."}</p></div></div>${deviceButton(`${icon("refresh")} Sync trips`, "sync-trips", "primary full")}</section>`;
+}
+
+function trips() {
+  // The connected MOKUKU first, then the device with the newest trip.
+  const connected = state.connected ? state.devices[0].address : null;
+  const groups = state.devices.map((device) => ({ device, trips: state.trips.filter((trip) => trip.address === device.address).sort((left, right) => right.start - left.start) }))
+    .filter((group) => group.trips.length)
+    .sort((left, right) => (right.device.address === connected) - (left.device.address === connected) || right.trips[0].start - left.trips[0].start);
+  const list = groups.length
+    ? groups.map(({ device, trips }) => {
+      const current = device.address === connected;
+      return `<section class="trip-group ${current ? "connected" : ""}"><div class="section-heading"><h3>${device.name} <span class="detail">(${trips.length})</span></h3>${current ? '<span class="connection online"><span></span>Connected</span>' : ""}</div><div class="detail mono trip-address">${device.address}</div><div class="trip-list">${trips.map(tripCard).join("")}</div></section>`;
+    }).join("")
+    : `<section class="empty-state"><div class="trip-illustration" aria-hidden="true"><span class="orbit"></span><span class="orbit inner"></span>${icon("trips")}<span class="tiny-dot"></span></div><h2>No trips on<br>this phone yet.</h2><p>Connect to MOKUKU and sync. Trips are saved here, grouped by device.</p></section>`;
+  return `<h1 class="greeting">Trips</h1><p class="description">Every drive with MOKUKU, kept on this phone.</p>${syncCard()}${list}`;
+}
+
+function trip() {
+  const current = state.trip;
+  if (!current) return trips();
+  const device = state.devices.find((item) => item.address === current.address);
+  const average = current.kilometers / (current.minutes / 60);
+  return `<h1 class="greeting">${tripDate(current, false)}</h1><p class="description">${current.start.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })} · ${device.name}</p>
+    <section class="map-card" aria-label="Trip route map">${routeSvg(current, 360, 300, 36, "route-map")}<span class="map-note">Preview · route only. The app draws it on OpenStreetMap.</span><span class="map-attribution">© OpenStreetMap contributors</span></section>
+    <div class="map-legend"><span><i class="route-start"></i>Start</span><span><i class="route-end"></i>End</span></div>
+    <div class="info-grid">
+      <section class="card"><div class="label">${icon("trips")} Distance</div><div class="value">${current.kilometers.toFixed(1)} <span class="detail">km</span></div></section>
+      <section class="card"><div class="label">${icon("refresh")} Duration</div><div class="value">${duration(current.minutes)}</div></section>
+      <section class="card"><div class="label">${icon("software")} Average speed</div><div class="value">${Math.round(average)} <span class="detail">km/h</span></div></section>
+      <section class="card"><div class="label">${icon("update")} Top speed</div><div class="value">${current.maximumKmh} <span class="detail">km/h</span></div><div class="detail">GPS speed</div></section>
+    </div>
+    <p class="detail" style="margin:18px 4px">From <span class="mono">${current.name}</span> · recorded by MOKUKU from GPS fixes.</p>`;
+}
+
+const pages = { home, updates, simulation, debug, records, trips, trip, tools };
+const subpageNames = { updates: "Updates", simulation: "Simulation", debug: "Debug", trip: "Trip" };
+const parentPages = { simulation: "home", trip: "trips" };
+const pageLabels = { home: "Home", trips: "Trips", tools: "Tools" };
 
 function render() {
   const subpage = Object.hasOwn(subpageNames, state.route);
-  const parent = state.route === "simulation" ? "home" : "tools";
-  document.getElementById("app-heading").innerHTML = `<header class="app-header">${subpage ? `<div class="subpage-heading"><button class="icon-button" data-route="${parent}" aria-label="Back to ${parent === "home" ? "Home" : "Tools"}">${icon("back")}</button><h2>${subpageNames[state.route]}</h2></div>` : '<div><div class="app-wordmark">MOKUKU</div><div class="app-subtitle">YOUR LITTLE COMPANION</div></div>'}${status()}</header>`;
+  const parent = parentPages[state.route] || "tools";
+  document.getElementById("app-heading").innerHTML = `<header class="app-header">${subpage ? `<div class="subpage-heading"><button class="icon-button" data-route="${parent}" aria-label="Back to ${pageLabels[parent]}">${icon("back")}</button><h2>${subpageNames[state.route]}</h2></div>` : '<div><div class="app-wordmark">MOKUKU</div><div class="app-subtitle">YOUR LITTLE COMPANION</div></div>'}${status()}</header>`;
   screen.innerHTML = pages[state.route]();
   const navigation = document.getElementById("bottom-navigation");
   navigation.hidden = subpage;
@@ -257,6 +355,46 @@ function download(name) {
   }, 250);
 }
 
+function cancelSync(notify = true) {
+  clearInterval(transferTimer);
+  state.sync = null;
+  if (state.route === "trips") {
+    state.scroll.trips = screen.scrollTop;
+    render();
+  }
+  if (notify) toast("Sample sync canceled. Trips already saved stay on this phone.");
+}
+
+function syncTrips() {
+  if (state.sync || state.transfer) return;
+  if (!state.deviceOnlyTrips.length) {
+    toast(`Preview: this phone already has every trip from ${state.devices[0].name}.`);
+    return;
+  }
+  state.sync = { index: 0, total: state.deviceOnlyTrips.length, progress: 0 };
+  render();
+  toast("Preview: demonstrating a trip sync with sample data.");
+  transferTimer = setInterval(() => {
+    state.sync.progress = Math.min(state.sync.progress + 20, 100);
+    if (state.sync.progress === 100) {
+      state.sync.index++;
+      state.sync.progress = 0;
+      if (state.sync.index === state.sync.total) {
+        const count = state.sync.total;
+        state.trips.push(...state.deviceOnlyTrips);
+        state.deviceOnlyTrips = [];
+        cancelSync(false);
+        toast(`Sample sync complete: ${count} new trips. No files were saved to your phone.`);
+        return;
+      }
+    }
+    if (state.route === "trips") {
+      state.scroll.trips = screen.scrollTop;
+      render();
+    }
+  }, 250);
+}
+
 function confirmUpdate(kind, eye) {
   const rollback = kind === "Firmware rollback";
   const target = eye === "both" ? "both eyes" : `the ${eye} eye`;
@@ -279,6 +417,7 @@ const actions = {
   "confirm-disconnect"() {
     state.connected = false;
     cancelDownload(false);
+    cancelSync(false);
     closeSheet();
     render();
     toast("Sample device disconnected.");
@@ -324,6 +463,13 @@ const actions = {
     toast("Preview: date & time request. The device clock was not changed.");
   },
   download(element) { download(element.dataset.file); },
+  "sync-trips": syncTrips,
+  "cancel-sync"() { cancelSync(); },
+  "open-trip"(element) {
+    state.trip = state.trips[Number(element.dataset.trip)];
+    state.scroll.trip = 0;
+    navigate("trip");
+  },
   "cancel-download"() { cancelDownload(); },
   "record-menu"(element) {
     const name = element.dataset.file;
@@ -360,7 +506,8 @@ document.addEventListener("click", (event) => {
     const target = element.dataset.preview;
     state.connected = target !== "disconnected";
     state.hasConnected = state.connected;
-    if (!state.connected) cancelDownload(false);
+    if (!state.connected) { cancelDownload(false); cancelSync(false); }
+    if (target === "trip") state.trip = state.trip || state.trips[0];
     navigate(target === "disconnected" ? "home" : target);
     return;
   }

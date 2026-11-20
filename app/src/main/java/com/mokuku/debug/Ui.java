@@ -42,6 +42,11 @@ final class Ui {
         return drawable;
     }
 
+    /** A rounded background with the mint press ripple. */
+    RippleDrawable pressable(int fill, int border, int radius) {
+        return new RippleDrawable(ColorStateList.valueOf(0x259ad8c2), background(fill, border, radius), null);
+    }
+
     TextView text(String value, int size, int color) {
         TextView text = new TextView(context);
         text.setText(value);
@@ -94,8 +99,7 @@ final class Ui {
         button.setMinimumWidth(0);
         button.setPadding(dp(14), dp(10), dp(14), dp(10));
         button.setTextColor(color(danger ? R.color.danger : primary ? R.color.accent_ink : R.color.text_primary));
-        button.setBackground(new RippleDrawable(ColorStateList.valueOf(0x259ad8c2),
-                background(primary ? R.color.accent : R.color.raised, primary ? 0 : R.color.border, 14), null));
+        button.setBackground(pressable(primary ? R.color.accent : R.color.raised, primary ? 0 : R.color.border, 14));
         button.setStateListAnimator(null);
         return button;
     }
@@ -112,6 +116,56 @@ final class Ui {
         image.setImageTintList(ColorStateList.valueOf(color(tint)));
         image.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         return image;
+    }
+
+    /** The trip's route, north up and fitted to the view, with a start ring and an end dot. */
+    View route(TripLog log, int background) {
+        View view = new View(context) {
+            private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            private final android.graphics.Path path = new android.graphics.Path();
+            private final float[] start = new float[2], end = new float[2];
+
+            @Override protected void onSizeChanged(int width, int height, int oldWidth, int oldHeight) {
+                path.reset();
+                int count = log.pointCount();
+                if (count == 0) return;
+                double west = Double.MAX_VALUE, east = -Double.MAX_VALUE, south = Double.MAX_VALUE, north = -Double.MAX_VALUE;
+                for (int i = 0; i < count; i++) {
+                    west = Math.min(west, log.eastMeters[i]); east = Math.max(east, log.eastMeters[i]);
+                    south = Math.min(south, log.northMeters[i]); north = Math.max(north, log.northMeters[i]);
+                }
+                float margin = dp(9);
+                double scale = Math.min(width - 2 * margin, height - 2 * margin) / Math.max(1, Math.max(east - west, north - south));
+                float left = (float) (width - (east - west) * scale) / 2, bottom = (float) (height + (north - south) * scale) / 2;
+                for (int i = 0; i < count; i++) {
+                    end[0] = left + (float) ((log.eastMeters[i] - west) * scale);
+                    end[1] = bottom - (float) ((log.northMeters[i] - south) * scale);
+                    if (i == 0) { start[0] = end[0]; start[1] = end[1]; path.moveTo(end[0], end[1]); } else path.lineTo(end[0], end[1]);
+                }
+            }
+
+            @Override protected void onDraw(Canvas canvas) {
+                super.onDraw(canvas);
+                if (log.pointCount() == 0) return;
+                paint.setStyle(Paint.Style.STROKE);
+                paint.setStrokeCap(Paint.Cap.ROUND);
+                paint.setStrokeJoin(Paint.Join.ROUND);
+                paint.setStrokeWidth(dp(2));
+                paint.setColor(color(R.color.accent));
+                canvas.drawPath(path, paint);
+                paint.setStyle(Paint.Style.FILL);
+                paint.setColor(color(R.color.warm));
+                canvas.drawCircle(end[0], end[1], dp(3.5f), paint);
+                paint.setColor(color(background));
+                canvas.drawCircle(start[0], start[1], dp(3.5f), paint);
+                paint.setStyle(Paint.Style.STROKE);
+                paint.setColor(color(R.color.accent));
+                canvas.drawCircle(start[0], start[1], dp(3.5f), paint);
+            }
+        };
+        view.setBackground(background(background, 0, 13));
+        view.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        return view;
     }
 
     View eyes(boolean sleeping) {

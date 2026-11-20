@@ -9,4 +9,9 @@
     <color name="text_secondary">#A2B2BE</color>
     <color name="warm">#E4BA83</color>
     <color name="danger">#F0A19B</color>
+    <!-- The connected MOKUKU's trips. -->
+    <color name="connected_group">#0A9AD8C2</color>
+    <color name="connected_border">#409AD8C2</color>
+    <color name="connected_surface">#172A2C</color>
+    <color name="connected_raised">#1F3536</color>
 </resources>

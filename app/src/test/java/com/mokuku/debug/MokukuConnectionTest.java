@@ -71,7 +71,7 @@ public class MokukuConnectionTest {
                     if (packet[0] == 60) listed.countDown();
                 }
             });
-            connection.setRecordingAccessCode("sample-code");
+            connection.setRecordingAccessCode("sample-code", false);
             assertTrue("Directory request was not sent", listed.await(5, TimeUnit.SECONDS));
             assertArrayEquals(MokukuProtocol.stringMessage(44, "sample-code", 255), writes.get(0));
             assertArrayEquals(MokukuProtocol.stringMessage(60, "/sd/record", 255), writes.get(1));
@@ -184,7 +184,7 @@ public class MokukuConnectionTest {
     public void savedCodeSurvivesDisconnectAndNewSessionAndIsReusedForListing() throws Exception {
         MokukuConnection first = connectedSession();
         try {
-            first.setRecordingAccessCode("sample-saved-code");
+            first.setRecordingAccessCode("sample-saved-code", false);
             onWorker(first, () -> {});
             first.disconnect();
             onWorker(first, () -> {});
@@ -222,10 +222,10 @@ public class MokukuConnectionTest {
                 .putString("11:22:33:44:55:66", "sample-second").apply();
         MokukuConnection first = connectedSession();
         try {
-            first.setRecordingAccessCode("");
+            first.setRecordingAccessCode("", false);
             onWorker(first, () -> {});
             assertEquals("sample-first", codes.getString("AA:BB:CC:DD:EE:FF", ""));
-            first.setRecordingAccessCode("sample-replacement");
+            first.setRecordingAccessCode("sample-replacement", false);
             onWorker(first, () -> {});
             first.forgetRecordingAccessCode();
             onWorker(first, () -> {});
@@ -479,6 +479,173 @@ public class MokukuConnectionTest {
             assertFalse(connection.snapshot().connected);
             assertTrue(connection.snapshot().message, connection.snapshot().message.contains("Firmware sent"));
         } finally { connection.close(); }
+    }
+
+    @Test public void mokukuIISyncContinuesTheNewestTripAndAddsNewOnes() throws Exception {
+        MokukuConnection connection = connectedSession();
+        try {
+            TripStore store = new TripStore(RuntimeEnvironment.getApplication());
+            byte[] first = pattern(120), second = pattern(250), third = pattern(330);
+            TripLogTest.savePhoneTrip(store, "AA:BB:CC:DD:EE:FF", "MOKUKU", 1, first);
+            TripLogTest.savePhoneTrip(store, "AA:BB:CC:DD:EE:FF", "MOKUKU", 2, java.util.Arrays.copyOf(second, 130));
+            TripPeer peer = new TripPeer(connection, true);
+            peer.files.put(1, first);
+            peer.files.put(2, second);
+            peer.files.put(3, third);
+            connection.syncTrips();
+            assertTrue(connection.snapshot().message, peer.ended.await(5, TimeUnit.SECONDS));
+            onWorker(connection, () -> {});
+            MokukuConnection.Snapshot snapshot = connection.snapshot();
+            assertFalse(snapshot.busy);
+            assertEquals("Synced MOKUKU: 1 new trip, 1 continued.", snapshot.message);
+            assertEquals(java.util.Arrays.asList("/sdcard/trip/trip_2.bin@130", "/sdcard/trip/trip_3.bin@0"), peer.starts);
+            assertArrayEquals(second, Files.readAllBytes(store.file("AA:BB:CC:DD:EE:FF", 2).toPath()));
+            assertArrayEquals(third, Files.readAllBytes(store.file("AA:BB:CC:DD:EE:FF", 3).toPath()));
+            assertArrayEquals(first, Files.readAllBytes(store.file("AA:BB:CC:DD:EE:FF", 1).toPath()));
+            assertEquals(1, snapshot.tripsVersion);
+        } finally { connection.close(); }
+    }
+
+    @Test public void originalSyncProbesNewerTripsWhenTheListingIsTooLongToReply() throws Exception {
+        MokukuConnection connection = connectedSession();
+        try {
+            TripStore store = new TripStore(RuntimeEnvironment.getApplication());
+            byte[] fifth = pattern(150), sixth = pattern(210);
+            TripLogTest.savePhoneTrip(store, "AA:BB:CC:DD:EE:FF", "MOKUKU", 5, fifth);
+            TripPeer peer = new TripPeer(connection, false);
+            peer.files.put(5, fifth);
+            peer.files.put(6, sixth);
+            onWorker(connection, () -> ReflectionHelpers.setField(connection, "recordingAccessCode", "sample-code"));
+            connection.syncTrips();
+            assertTrue(peer.listed.await(5, TimeUnit.SECONDS));
+            onWorker(connection, () -> {});
+            // The paused test clock never fires the listing's reply timeout.
+            onWorker(connection, ReflectionHelpers.getField(connection, "requestTimeout"));
+            assertTrue(connection.snapshot().message, peer.ended.await(5, TimeUnit.SECONDS));
+            onWorker(connection, () -> {});
+            assertTrue(connection.snapshot().connected);
+            assertEquals("Synced MOKUKU: 1 new trip.", connection.snapshot().message);
+            assertEquals(java.util.Arrays.asList("/sd/trip/trip_5.bin@150", "/sd/trip/trip_6.bin@0", "/sd/trip/trip_7.bin@0"), peer.starts);
+            assertArrayEquals(sixth, Files.readAllBytes(store.file("AA:BB:CC:DD:EE:FF", 6).toPath()));
+        } finally { connection.close(); }
+    }
+
+    @Test public void syncKeepsAPhoneTripThatDiffersFromTheDevice() throws Exception {
+        MokukuConnection connection = connectedSession();
+        try {
+            TripStore store = new TripStore(RuntimeEnvironment.getApplication());
+            byte[] phoneCopy = pattern(100);
+            phoneCopy[0] ^= 1;
+            TripLogTest.savePhoneTrip(store, "AA:BB:CC:DD:EE:FF", "MOKUKU", 1, phoneCopy);
+            TripPeer peer = new TripPeer(connection, true);
+            peer.files.put(1, pattern(200));
+            connection.syncTrips();
+            assertTrue(peer.ended.await(5, TimeUnit.SECONDS));
+            onWorker(connection, () -> {});
+            assertTrue(connection.snapshot().message, connection.snapshot().message.contains("trip_1.bin differs from the phone copy, which was kept"));
+            assertArrayEquals(phoneCopy, Files.readAllBytes(store.file("AA:BB:CC:DD:EE:FF", 1).toPath()));
+        } finally { connection.close(); }
+    }
+
+    /** MOKUKU's trip directory: lists it, or stays silent as the original does for a long listing, and serves resumable downloads. */
+    private final class TripPeer {
+        static final int SECTOR_SIZE = 100;
+        final Map<Integer, byte[]> files = new java.util.TreeMap<>();
+        final List<String> starts = new java.util.concurrent.CopyOnWriteArrayList<>();
+        final CountDownLatch listed = new CountDownLatch(1);
+        final CountDownLatch ended = new CountDownLatch(1);
+        final BluetoothGatt gatt;
+        final BluetoothGattCallback callback;
+        final MokukuConnection connection;
+        final BluetoothGattCharacteristic command = new BluetoothGattCharacteristic(MokukuProtocol.FILE_COMMAND,
+                BluetoothGattCharacteristic.PROPERTY_WRITE | BluetoothGattCharacteristic.PROPERTY_NOTIFY, 0);
+        final BluetoothGattCharacteristic data = new BluetoothGattCharacteristic(MokukuProtocol.FILE_DATA,
+                BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE | BluetoothGattCharacteristic.PROPERTY_NOTIFY, 0);
+        byte[] serving;
+        int offset;
+
+        TripPeer(MokukuConnection connection, boolean mokukuII) throws Exception {
+            this.connection = connection;
+            gatt = ReflectionHelpers.getField(connection, "gatt");
+            callback = ReflectionHelpers.getField(connection, "gattCallback");
+            BluetoothGattService service = new BluetoothGattService(MokukuProtocol.SERVICE, BluetoothGattService.SERVICE_TYPE_PRIMARY);
+            service.addCharacteristic(command);
+            service.addCharacteristic(data);
+            onWorker(connection, () -> {
+                ReflectionHelpers.setField(connection, "mokukuII", mokukuII);
+                ReflectionHelpers.setField(connection, "name", "MOKUKU");
+                ReflectionHelpers.setField(connection, "fileCommand", command);
+                ReflectionHelpers.setField(connection, "fileData", data);
+                ReflectionHelpers.setField(connection, "mtu", 517);
+                BluetoothGattCharacteristic messages = ReflectionHelpers.getField(connection, "messages");
+                shadowOf(gatt).setGattCallback(new BluetoothGattCallback() {
+                    @Override public void onCharacteristicWrite(BluetoothGatt value, BluetoothGattCharacteristic characteristic, int status) {
+                        byte[] packet = characteristic.getValue().clone();
+                        callback.onCharacteristicWrite(value, characteristic, status);
+                        if (characteristic == command) command(packet);
+                        else if (characteristic == data) acknowledgement(packet);
+                        else if (mokukuII && packet[0] == 3 && packet[1] == 10) list(messages, packet[2] & 0xff);
+                        else if (packet[0] == 60) listed.countDown();
+                    }
+                });
+            });
+        }
+
+        private void list(BluetoothGattCharacteristic messages, int first) {
+            StringBuilder names = new StringBuilder();
+            if (first == 0) for (int number : files.keySet()) names.append(names.length() == 0 ? "" : ",").append("trip_").append(number).append(".bin");
+            byte[] text = names.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            notify(messages, ByteBuffer.allocate(text.length + 3).put((byte) 3).put((byte) 10).put((byte) 0).put(text).array());
+        }
+
+        private void command(byte[] frame) {
+            ByteBuffer body = ByteBuffer.wrap(MokukuProtocol.withoutCrc(frame, frame.length)).order(ByteOrder.LITTLE_ENDIAN);
+            if (body.getShort(0) == MokukuProtocol.COMMAND_STOP) return;
+            offset = body.getInt(2);
+            String path = new String(body.array(), 6, body.limit() - 6, java.nio.charset.StandardCharsets.UTF_8);
+            starts.add(path + "@" + offset);
+            serving = files.get(Integer.parseInt(path.replaceAll(".*trip_|\\.bin", "")));
+            ByteBuffer reply = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN)
+                    .putShort((short) MokukuProtocol.COMMAND_REPLY).putShort((short) MokukuProtocol.COMMAND_START_DOWNLOAD);
+            if (serving == null) reply.putShort((short) MokukuProtocol.COMMAND_UNAVAILABLE);
+            else reply.putShort((short) 0).putInt(serving.length).putInt(SECTOR_SIZE).putShort((short) MokukuProtocol.crc16(serving, 0, offset, 0));
+            notify(command, MokukuConnectionTest.withCrc(java.util.Arrays.copyOf(reply.array(), serving == null ? 6 : 16)));
+            if (serving != null && offset < serving.length) sendSector(0);
+            checkEnded();
+        }
+
+        private void acknowledgement(byte[] frame) {
+            int next = ByteBuffer.wrap(MokukuProtocol.withoutCrc(frame, frame.length)).order(ByteOrder.LITTLE_ENDIAN).getShort(4);
+            if (offset + next * SECTOR_SIZE < serving.length) sendSector(next);
+            checkEnded();
+        }
+
+        private void checkEnded() {
+            try { onWorkerLater(); } catch (Exception ignored) {}
+        }
+
+        // The sync ends on the worker after this write; check once it has run.
+        private void onWorkerLater() {
+            Handler worker = ReflectionHelpers.getField(connection, "worker");
+            worker.post(() -> { if (!connection.snapshot().busy) ended.countDown(); });
+        }
+
+        private void sendSector(int index) {
+            int start = offset + index * SECTOR_SIZE;
+            byte[] sector = MokukuConnectionTest.withCrc(java.util.Arrays.copyOfRange(serving, start, Math.min(serving.length, start + SECTOR_SIZE)));
+            for (int position = 0, sequence = 0; position < sector.length; position += 40, sequence++) {
+                int length = Math.min(40, sector.length - position);
+                boolean last = position + length == sector.length;
+                notify(data, ByteBuffer.allocate(3 + length).order(ByteOrder.LITTLE_ENDIAN).putShort((short) index)
+                        .put((byte) (last ? MokukuProtocol.LAST_PACKET : sequence)).put(sector, position, length).array());
+            }
+        }
+
+        @SuppressWarnings("deprecation")
+        private void notify(BluetoothGattCharacteristic characteristic, byte[] packet) {
+            characteristic.setValue(packet);
+            callback.onCharacteristicChanged(gatt, characteristic);
+        }
     }
 
     private static byte[] withCrc(byte[] body) {

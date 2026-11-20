@@ -31,7 +31,7 @@ still needs firmware or hardware verification rather than guessing.
 | Path | Purpose |
 |---|---|
 | `app/` | Native Android manifest, Java code, and XML resources. |
-| `app/src/main/java/com/mokuku/debug/` | `MainActivity`/`Ui` for screens, `MokukuConnection` for BLE/file operations, and `MokukuProtocol` for byte framing/validation. |
+| `app/src/main/java/com/mokuku/debug/` | `MainActivity`/`Ui` for screens, `MokukuConnection` for BLE/file operations, `MokukuProtocol` for byte framing/validation, and `TripLog`/`TripStore` for trip files. |
 | `app/src/test/` | Protocol fixtures and native UI/lifecycle checks. |
 | `design/` | Style guide, screen flows, protocol map, and HTML/CSS/JavaScript prototype. |
 | `design/previews/` | Browser prototype screenshots and labeled native Android renders. |
@@ -43,8 +43,9 @@ still needs firmware or hardware verification rather than guessing.
 ## Product and design
 
 - Keep four tabs: **Home**, **Data Collection**, **Trips**, and **Tools**.
-  Simulation opens from Home; Updates and Debug open from Tools. Trips remains
-  “Coming later” until its implementation is requested.
+  Simulation opens from Home; a trip's map opens from Trips; Updates and Debug open
+  from Tools. Trips list phone copies grouped by device, the connected MOKUKU first;
+  syncing never deletes device or phone trips.
 - Follow the charcoal/slate surfaces, muted mint accents, spacing, typography,
   and touch targets in the style guide. Preserve accessible labels, readable
   contrast, system font scaling, reduced motion, and Android Back behavior.

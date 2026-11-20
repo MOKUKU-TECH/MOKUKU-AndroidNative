@@ -66,6 +66,13 @@ public final class MainActivity extends Activity {
         // Recording to download once Android 9 or older grants storage access.
         String pendingDownload;
         final Map<String, Integer> scroll = new HashMap<>();
+        // Trips saved on the phone, parsed off the main thread; null until loaded.
+        List<TripStore.Device> trips;
+        // The snapshot's tripsVersion that the last load started from.
+        int tripsRequestedVersion = -1;
+        final ExecutorService tripLoader = Executors.newSingleThreadExecutor();
+        TripStore.Trip openTrip;
+        MainActivity activity;
     }
 
     private Session session;
@@ -96,6 +103,7 @@ public final class MainActivity extends Activity {
     private TextView discoveryStatus;
     private final Map<String, Button> discoveryDevices = new HashMap<>();
     private OnBackInvokedCallback backCallback;
+    private org.osmdroid.views.MapView map;
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -110,6 +118,7 @@ public final class MainActivity extends Activity {
             session.remoteUrl = sources.getString("remote_url", "");
             if (savedInstanceState != null) session.route = savedInstanceState.getString("route", "home");
         }
+        session.activity = this;
         snapshot = session.connection.snapshot();
         setContentView(R.layout.activity_main);
         content = findViewById(R.id.content);
@@ -137,14 +146,29 @@ public final class MainActivity extends Activity {
         super.onSaveInstanceState(state);
     }
 
+    @Override protected void onResume() {
+        super.onResume();
+        if (map != null) map.onResume();
+    }
+
+    @Override protected void onPause() {
+        if (map != null) map.onPause();
+        super.onPause();
+    }
+
     @Override protected void onDestroy() {
+        if (session.activity == this) session.activity = null;
+        releaseMap();
         session.connection.setListener(null);
         if (recordingAccess != null) recordingAccess.dismiss();
         if (discovery != null) {
             discovery.setOnDismissListener(null);
             discovery.dismiss();
         }
-        if (!isChangingConfigurations()) session.connection.close();
+        if (!isChangingConfigurations()) {
+            session.connection.close();
+            session.tripLoader.shutdown();
+        }
         if (Build.VERSION.SDK_INT >= 33 && backCallback != null) {
             getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(backCallback);
         }
@@ -157,7 +181,8 @@ public final class MainActivity extends Activity {
 
     private boolean goBack() {
         if ("home".equals(session.route)) return false;
-        navigate("updates".equals(session.route) || "debug".equals(session.route) ? "tools" : "home");
+        String parent = parentRoute(session.route);
+        navigate(parent == null ? "home" : parent);
         return true;
     }
 
@@ -203,6 +228,11 @@ public final class MainActivity extends Activity {
                 || previous.busy != update.busy || !previous.name.equals(update.name))) {
             session.scroll.put(session.route, scroll.getScrollY());
             render();
+        } else if ("trips".equals(session.route)) {
+            if (previous.busy != update.busy || previous.tripsVersion != update.tripsVersion || !java.util.Objects.equals(previous.tripStatus, update.tripStatus)) {
+                session.scroll.put(session.route, scroll.getScrollY());
+                render();
+            } else updateProgress();
         } else if ("records".equals(session.route)) {
             boolean sameTransfer = previous.operation != null && previous.operation.equals(update.operation)
                     && update.operation.startsWith("Downloading ") && progress != null;
@@ -214,16 +244,18 @@ public final class MainActivity extends Activity {
     }
 
     private void render() {
+        releaseMap();
         content.removeAllViews(); header.removeAllViews(); navigation.removeAllViews();
         deviceControls.clear();
         wifiName = null; wifiPassword = null; remoteUrl = null;
         speed = null; rpm = null; fuel = null;
         firmwareVersion = null; memeVersion = null;
         progress = null; progressText = null; firmwareProgress = null;
-        boolean subpage = "updates".equals(session.route) || "debug".equals(session.route) || "simulation".equals(session.route);
+        String parent = parentRoute(session.route);
+        boolean subpage = parent != null;
         if (subpage) {
             Button back = ui.button("‹", false, false);
-            back.setContentDescription("Back to " + ("simulation".equals(session.route) ? "Home" : "Tools"));
+            back.setContentDescription("Back to " + Character.toUpperCase(parent.charAt(0)) + parent.substring(1));
             back.setOnClickListener(view -> goBack());
             header.addView(back, new LinearLayout.LayoutParams(ui.dp(48), -2));
         }
@@ -247,6 +279,7 @@ public final class MainActivity extends Activity {
             case "simulation": simulation(); break;
             case "records": records(); break;
             case "trips": trips(); break;
+            case "trip": trip(); break;
             case "tools": tools(); break;
             default: session.route = "home"; home(); break;
         }
@@ -255,10 +288,21 @@ public final class MainActivity extends Activity {
         scroll.post(() -> scroll.scrollTo(0, position));
     }
 
+    // The tab a subpage's Back returns to; null for the tabs themselves.
+    private static String parentRoute(String route) {
+        switch (route) {
+            case "updates": case "debug": return "tools";
+            case "simulation": return "home";
+            case "trip": return "trips";
+            default: return null;
+        }
+    }
+
     private String pageName() {
         switch (session.route) {
             case "updates": return "Updates";
             case "debug": return "Debug";
+            case "trip": return "Trip";
             default: return "Simulation";
         }
     }
@@ -787,7 +831,7 @@ public final class MainActivity extends Activity {
             String code = input.getText().toString();
             try {
                 MokukuProtocol.stringMessage(44, code, 255);
-                session.connection.setRecordingAccessCode(code);
+                session.connection.setRecordingAccessCode(code, "trips".equals(session.route));
                 dialog.dismiss();
             } catch (IllegalArgumentException exception) { input.setError(exception.getMessage()); }
         }));
@@ -822,16 +866,228 @@ public final class MainActivity extends Activity {
     }
 
     private void trips() {
-        intro("Trips", "There’s more down the road.");
-        ui.gap(content, 70);
-        content.addView(ui.eyes(true), new LinearLayout.LayoutParams(-1, ui.dp(100)));
-        TextView title = ui.text("Your journeys, all together.", 25, R.color.text_primary);
-        title.setGravity(Gravity.CENTER);
-        content.addView(title);
-        ui.gap(content, 16);
-        TextView message = ui.muted("A place for the trips you make with MOKUKU. Coming later.");
-        message.setGravity(Gravity.CENTER);
-        content.addView(message);
+        intro("Trips", "Every drive with MOKUKU, kept on this phone.");
+        syncCard();
+        loadTrips();
+        if (session.trips == null) { content.addView(ui.muted("Loading trips…")); return; }
+        if (session.trips.isEmpty()) {
+            ui.gap(content, 40);
+            content.addView(ui.eyes(true), new LinearLayout.LayoutParams(-1, ui.dp(100)));
+            TextView title = ui.text("No trips on this phone yet.", 25, R.color.text_primary);
+            title.setGravity(Gravity.CENTER);
+            content.addView(title);
+            ui.gap(content, 16);
+            TextView message = ui.muted("Connect to MOKUKU and sync. Trips are saved here, grouped by device.");
+            message.setGravity(Gravity.CENTER);
+            content.addView(message);
+            return;
+        }
+        // The connected MOKUKU first, then the device with the newest trip.
+        String connected = snapshot.connected ? snapshot.address : null;
+        List<TripStore.Device> devices = new ArrayList<>(session.trips);
+        java.util.Collections.sort(devices, (left, right) -> {
+            int current = Boolean.compare(right.address.equals(connected), left.address.equals(connected));
+            return current != 0 ? current : Long.compare(right.trips.get(0).log.startUnixMilliseconds, left.trips.get(0).log.startUnixMilliseconds);
+        });
+        for (TripStore.Device device : devices) tripGroup(device, device.address.equals(connected));
+    }
+
+    private void syncCard() {
+        LinearLayout card = ui.card(content);
+        if (MokukuConnection.TRIP_SYNC.equals(snapshot.operation)) {
+            card.addView(ui.text("Syncing trips", 18, R.color.text_primary));
+            ui.gap(card, 8);
+            progressCard(card, snapshot.tripStatus == null ? "Starting…" : snapshot.tripStatus, "Cancel sync");
+            updateProgress();
+            return;
+        }
+        card.addView(ui.text(snapshot.connected ? snapshot.name : "Sync with MOKUKU", 18, R.color.text_primary));
+        card.addView(ui.muted(snapshot.connected ? "Downloads the trips this phone doesn’t have yet."
+                : "Connect to download new trips. Saved trips stay on this phone."));
+        deviceButton(card, "Sync trips", true, false, () -> {
+            if (snapshot.mokukuII || snapshot.hasRecordingAccessCode) session.connection.syncTrips();
+            else enterRecordingAccessCode();
+        });
+    }
+
+    private void loadTrips() {
+        if (session.tripsRequestedVersion == snapshot.tripsVersion) return;
+        session.tripsRequestedVersion = snapshot.tripsVersion;
+        Session current = session;
+        TripStore store = new TripStore(this);
+        Handler main = new Handler(Looper.getMainLooper());
+        current.tripLoader.execute(() -> {
+            List<TripStore.Device> devices = store.load();
+            main.post(() -> {
+                current.trips = devices;
+                MainActivity activity = current.activity;
+                if (activity != null && ("trips".equals(current.route) || "trip".equals(current.route))) {
+                    current.scroll.put(current.route, activity.scroll.getScrollY());
+                    activity.render();
+                }
+            });
+        });
+    }
+
+    private void tripGroup(TripStore.Device device, boolean connected) {
+        LinearLayout group = ui.column();
+        LinearLayout.LayoutParams parameters = new LinearLayout.LayoutParams(-1, -2);
+        parameters.topMargin = ui.dp(connected ? 14 : 22);
+        if (connected) {
+            group.setPadding(ui.dp(12), ui.dp(14), ui.dp(12), ui.dp(2));
+            group.setBackground(ui.background(R.color.connected_group, R.color.connected_border, 22));
+        }
+        content.addView(group, parameters);
+        LinearLayout heading = ui.row();
+        heading.addView(ui.text(device.name + " (" + device.trips.size() + ")", 17, connected ? R.color.accent : R.color.text_primary),
+                new LinearLayout.LayoutParams(0, -2, 1));
+        if (connected) heading.addView(ui.text("● Connected", 12, R.color.accent));
+        group.addView(heading);
+        TextView address = ui.text(device.address, 12, R.color.text_secondary);
+        address.setTypeface(Typeface.MONOSPACE);
+        group.addView(address);
+        ui.gap(group, 10);
+        for (TripStore.Trip trip : device.trips) tripRow(group, trip, connected);
+    }
+
+    private static String tripStart(TripLog log, String skeleton) {
+        String pattern = android.text.format.DateFormat.getBestDateTimePattern(Locale.getDefault(), skeleton);
+        return new java.text.SimpleDateFormat(pattern, Locale.getDefault()).format(new java.util.Date(log.startUnixMilliseconds));
+    }
+
+    private static String tripDuration(TripLog log) {
+        long minutes = Math.round(log.durationMilliseconds / 60000.0);
+        return minutes >= 60 ? minutes / 60 + " h " + minutes % 60 + " min" : minutes + " min";
+    }
+
+    private static String tripDistance(TripLog log) {
+        return String.format(Locale.getDefault(), "%.1f km", log.distanceMeters / 1000);
+    }
+
+    private void tripRow(LinearLayout parent, TripStore.Trip trip, boolean connected) {
+        LinearLayout row = ui.row();
+        row.setPadding(ui.dp(10), ui.dp(10), ui.dp(14), ui.dp(10));
+        row.setMinimumHeight(ui.dp(84));
+        row.setBackground(ui.pressable(connected ? R.color.connected_surface : R.color.surface, connected ? R.color.connected_border : R.color.border, 17));
+        row.addView(ui.route(trip.log, connected ? R.color.connected_raised : R.color.raised), new LinearLayout.LayoutParams(ui.dp(64), ui.dp(64)));
+        LinearLayout labels = ui.column();
+        labels.setPadding(ui.dp(14), 0, ui.dp(8), 0);
+        String start = tripStart(trip.log, "EEEdMMMjmm");
+        String summary = tripDistance(trip.log) + " · " + tripDuration(trip.log);
+        labels.addView(ui.text(start, 16, R.color.text_primary));
+        labels.addView(ui.muted(summary));
+        row.addView(labels, new LinearLayout.LayoutParams(0, -2, 1));
+        row.addView(ui.text("›", 22, R.color.text_secondary));
+        row.setContentDescription("Trip on " + start + ", " + summary);
+        row.setFocusable(true);
+        row.setOnClickListener(view -> {
+            session.openTrip = trip;
+            session.scroll.put("trip", 0);
+            navigate("trip");
+        });
+        LinearLayout.LayoutParams parameters = new LinearLayout.LayoutParams(-1, -2);
+        parameters.bottomMargin = ui.dp(10);
+        parent.addView(row, parameters);
+    }
+
+    private void trip() {
+        TripStore.Trip trip = session.openTrip;
+        if (trip == null) { session.route = "trips"; trips(); return; }
+        TripLog log = trip.log;
+        intro(tripStart(log, "EEEdMMMyyyy"), tripStart(log, "jmm") + " · " + trip.deviceName);
+        tripMap(log);
+        LinearLayout legend = ui.row();
+        legend.setPadding(ui.dp(4), ui.dp(12), 0, ui.dp(16));
+        legend.addView(ui.text("○ Start", 13, R.color.accent));
+        TextView end = ui.text("● End", 13, R.color.warm);
+        end.setPadding(ui.dp(18), 0, 0, 0);
+        legend.addView(end);
+        content.addView(legend);
+        LinearLayout first = overviewRow();
+        statistic(overviewColumn(first, true), "Distance", tripDistance(log));
+        statistic(overviewColumn(first, false), "Duration", tripDuration(log));
+        LinearLayout second = overviewRow();
+        statistic(overviewColumn(second, true), "Average speed", Math.round(log.averageSpeedKmh()) + " km/h");
+        statistic(overviewColumn(second, false), "Top GPS speed", Math.round(log.maximumGpsSpeedKmh) + " km/h");
+        content.addView(ui.muted("From " + trip.file.getName() + " · " + log.pointCount() + " GPS points recorded by MOKUKU."));
+    }
+
+    private void statistic(LinearLayout parent, String title, String value) {
+        LinearLayout card = ui.card(parent);
+        card.addView(ui.muted(title));
+        ui.gap(card, 8);
+        card.addView(ui.text(value, 18, R.color.text_primary));
+    }
+
+    @android.annotation.SuppressLint("ClickableViewAccessibility")
+    private void tripMap(TripLog log) {
+        org.osmdroid.config.IConfigurationProvider configuration = org.osmdroid.config.Configuration.getInstance();
+        configuration.setUserAgentValue(getPackageName());
+        File cache = new File(getCacheDir(), "osmdroid");
+        configuration.setOsmdroidBasePath(cache);
+        configuration.setOsmdroidTileCache(new File(cache, "tiles"));
+        map = new org.osmdroid.views.MapView(this);
+        map.setTileSource(org.osmdroid.tileprovider.tilesource.TileSourceFactory.MAPNIK);
+        map.setMultiTouchControls(true);
+        map.setTilesScaledToDpi(true);
+        // Inverted, dimmed tiles match the dark app.
+        android.graphics.ColorMatrix tiles = new android.graphics.ColorMatrix(new float[] {
+                -1, 0, 0, 0, 255, 0, -1, 0, 0, 255, 0, 0, -1, 0, 255, 0, 0, 0, 1, 0});
+        android.graphics.ColorMatrix dim = new android.graphics.ColorMatrix();
+        dim.setScale(.72f, .8f, .86f, 1);
+        tiles.postConcat(dim);
+        map.getOverlayManager().getTilesOverlay().setColorFilter(new android.graphics.ColorMatrixColorFilter(tiles));
+        List<org.osmdroid.util.GeoPoint> points = new ArrayList<>();
+        for (double[] point : log.latitudeLongitudes()) points.add(new org.osmdroid.util.GeoPoint(point[0], point[1]));
+        if (points.isEmpty()) points.add(new org.osmdroid.util.GeoPoint(log.originLatitude, log.originLongitude));
+        org.osmdroid.views.overlay.Polyline route = new org.osmdroid.views.overlay.Polyline(map);
+        route.setPoints(points);
+        route.getOutlinePaint().setColor(ui.color(R.color.accent));
+        route.getOutlinePaint().setStrokeWidth(ui.dp(4));
+        route.getOutlinePaint().setStrokeCap(android.graphics.Paint.Cap.ROUND);
+        route.getOutlinePaint().setStrokeJoin(android.graphics.Paint.Join.ROUND);
+        route.setInfoWindow(null);
+        map.getOverlays().add(route);
+        map.getOverlays().add(endpoint(points.get(0), true));
+        map.getOverlays().add(endpoint(points.get(points.size() - 1), false));
+        map.getOverlays().add(new org.osmdroid.views.overlay.CopyrightOverlay(this));
+        org.osmdroid.util.BoundingBox box = org.osmdroid.util.BoundingBox.fromGeoPointsSafe(points);
+        map.getController().setZoom(16.0);
+        map.getController().setCenter(box.getCenterWithDateLine());
+        if (points.size() > 1) map.addOnFirstLayoutListener((view, left, top, right, bottom) -> map.zoomToBoundingBox(box, false, ui.dp(36)));
+        map.setBackground(ui.background(R.color.raised, R.color.border, 20));
+        map.setClipToOutline(true);
+        map.setContentDescription("Map of the trip route");
+        // Let the map pan inside the scrolling page.
+        map.setOnTouchListener((view, event) -> {
+            view.getParent().requestDisallowInterceptTouchEvent(event.getActionMasked() != android.view.MotionEvent.ACTION_UP);
+            return false;
+        });
+        content.addView(map, new LinearLayout.LayoutParams(-1, ui.dp(360)));
+        map.onResume();
+    }
+
+    private org.osmdroid.views.overlay.Marker endpoint(org.osmdroid.util.GeoPoint position, boolean start) {
+        org.osmdroid.views.overlay.Marker marker = new org.osmdroid.views.overlay.Marker(map);
+        marker.setPosition(position);
+        marker.setAnchor(org.osmdroid.views.overlay.Marker.ANCHOR_CENTER, org.osmdroid.views.overlay.Marker.ANCHOR_CENTER);
+        android.graphics.drawable.GradientDrawable icon = new android.graphics.drawable.GradientDrawable();
+        icon.setShape(android.graphics.drawable.GradientDrawable.OVAL);
+        icon.setSize(ui.dp(14), ui.dp(14));
+        icon.setColor(ui.color(start ? R.color.background : R.color.warm));
+        icon.setStroke(ui.dp(start ? 3 : 2), ui.color(start ? R.color.accent : R.color.background));
+        marker.setIcon(icon);
+        marker.setTitle(start ? "Start" : "End");
+        marker.setInfoWindow(null);
+        marker.setOnMarkerClickListener((clicked, view) -> true);
+        return marker;
+    }
+
+    private void releaseMap() {
+        if (map == null) return;
+        map.onPause();
+        map.onDetach();
+        map = null;
     }
 
     private void confirm(String title, String message, String action, Runnable confirmed) {
