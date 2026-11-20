@@ -2,10 +2,10 @@
 
 A calm, dark Android companion for the original two-eye ESP32-S3 MOKUKU and the
 single-ESP32-S31 MOKUKU II. Connect over Bluetooth LE to inspect device information, download and manage recordings,
-try eye interactions, and send update or debug commands.
+sync trips and see them on a map, try eye interactions, and send update or debug commands.
 
-Four tabs keep the app easy to explore: **Home**, **Data Collection**, **Trips**
-(coming later), and **Tools**, where Updates and Debug live. Muted mint accents,
+Four tabs keep the app easy to explore: **Home**, **Data Collection**, **Trips**,
+and **Tools**, where Updates and Debug live. Muted mint accents,
 soft slate cards, and generous spacing follow the approved companion design.
 
 | Home | Data Collection |
@@ -14,7 +14,8 @@ soft slate cards, and generous spacing follow the approved companion design.
 
 Native Android renders show the disconnected state; device values populate after
 connection. See [Tools](design/previews/native-tools.png),
-[Updates](design/previews/native-updates.png), and the
+[Updates](design/previews/native-updates.png), [Trips](design/previews/native-trips.png)
+and a [trip](design/previews/native-trip.png) (sample trips, map tiles not loaded), and the
 [access-code dialog](design/previews/native-access-code.png) for more screens.
 
 The app uses native Java/XML and the Gradle structure of `MobiliAndroidHUD`.
@@ -49,21 +50,50 @@ see [MOKUKU II](#mokuku-ii).
   storage access. Recordings are named by their start time (`YYYYMMDD_HHMMSS.rec`).
   Device deletion keeps phone copies. Cancel/disconnect discards only an unfinished
   download; start it again to retry.
-- **Trips:** coming later.
+- **Trips:** **Sync trips** downloads the connected MOKUKU's trips
+  ([format](../doc/TRIP_RECORDING.md) in MobiliMOKUKU) that the phone lacks, and the
+  rest of the phone's newest trip from it, which MOKUKU may still have been recording.
+  Trips stay in app-private storage, grouped by BLE address, with the connected
+  MOKUKU first. Open a trip to see its route on an OpenStreetMap map with distance,
+  duration, and speeds. **Delete older trips on MOKUKU** syncs, then deletes every
+  trip on MOKUKU's SD card except the latest; nothing is deleted if any trip fails to
+  sync. **Delete from phone** on a trip, or **Delete N trips from phone** under a
+  device, removes phone copies, also while disconnected; trips still on MOKUKU download
+  again on the next sync. The original MOKUKU needs the recording access code. See
+  [Trips](#trips) for sync limits.
 
 The phone sends commands over BLE; MOKUKU itself downloads OTA assets over its
-configured Wi-Fi. The app needs no internet or broad storage permission. Date/time
+configured Wi-Fi. The app uses the internet only for OpenStreetMap tiles, cached in
+app storage, and needs no broad storage permission. Date/time
 sends the chosen wall-clock fields in the firmware's shared calendar/clock basis;
 GPS can override its debug date. This behavior needs confirmation on hardware.
 
 The original firmware can omit filenames from a long directory response, and an
 empty result can also mean the directory could not be opened. The app reports
 **No recordings returned after clearing**, rather than promising every file was
-deleted. An oversized notification can time out; reconnect and retry. Hardware
+deleted. A listing too long for one notification gets no reply; the app stays connected
+and says so (Trips then finds trips by number, see [Trips](#trips)). Hardware
 validation is still required for BLE, date/time, OTA, and SD operations.
 
 Device information and the returned recording list are cleared on disconnect;
 downloaded phone copies remain available.
+
+## Trips
+
+Sync behavior to know:
+
+- **Long trip listings on the original MOKUKU.** Its firmware drops a directory reply that
+  does not fit one notification (MTU − 3 bytes, about 40 trip names), so the listing gets
+  no reply at all. The app treats the silence as "too many to list", keeps the connection,
+  and probes `trip_<n+1>.bin`, `trip_<n+2>.bin`, … above the newest phone trip until
+  MOKUKU reports one missing. MOKUKU II lists in pages and is unaffected.
+- **Reused trip numbers.** MOKUKU numbers trips from an NVS counter; erasing NVS (or a full
+  flash erase) restarts the numbers. When a device trip's first bytes do not match the
+  phone copy of the same name, the app keeps the phone copy and reports the difference.
+  A phone holding a higher-numbered trip from before the erase will not fetch the
+  device's new, lower-numbered trips until the device's numbers pass it.
+- **Internet.** The app uses the internet only for OpenStreetMap map tiles, through
+  osmdroid, cached in app storage; routes draw without them.
 
 ## Download performance
 
@@ -107,6 +137,7 @@ Compared with the original MOKUKU:
   meme updates.
 - **Debug:** OBD on/off with its current state. Debug log, date/time, and
   recording start/stop are not on BLE; start and stop recordings by voice.
+- **Trips:** no access code; the trip listing is complete (paged).
 - **Data Collection:** no access code. The list is complete (paged), and
   **Clear all recordings** deletes in one request, refused while recording. There is
   no per-file delete.
@@ -118,7 +149,7 @@ back; the app requests MTU 517 so they fit. Hardware verification is pending.
 ## App design
 
 The [first design proposal](design/README.md) covers the original two-eye MOKUKU:
-four tabs: Home (with Simulation), Data Collection, Trips (coming later), and Tools
+four tabs: Home (with Simulation), Data Collection, Trips (with a trip map), and Tools
 (with Updates and Debug).
 Open [the interactive prototype](design/index.html) in a browser to review the
 dark charcoal and mint style. Every device value and interaction in it is sample
@@ -170,7 +201,7 @@ write the APK to the same `output/` directory on the host.
 |---|---|
 | `AGENTS.md` | Repository scope, design conventions, build checks, and contributor workflow for coding agents. |
 | `app/` | Native Android application: manifest, Java activity, XML resources. |
-| `app/src/main/java/com/mokuku/debug/` | Native UI (`MainActivity`, `Ui`), serialized BLE session/file operations (`MokukuConnection`), and byte framing/validation (`MokukuProtocol`). |
+| `app/src/main/java/com/mokuku/debug/` | Native UI (`MainActivity`, `Ui`), serialized BLE session/file operations (`MokukuConnection`), byte framing/validation (`MokukuProtocol`), and trip parsing/storage (`TripLog`, `TripStore`). |
 | `app/src/test/` | Protocol fixtures and native navigation/lifecycle checks with Robolectric. |
 | `design/` | Visual style, screen flows, protocol map, and interactive prototype. |
 | `gradle/`, `gradlew`, `gradlew.bat` | Gradle wrapper for Linux, macOS, and Windows. |

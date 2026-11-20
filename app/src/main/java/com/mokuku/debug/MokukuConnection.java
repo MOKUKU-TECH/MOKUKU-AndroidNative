@@ -53,6 +53,10 @@ final class MokukuConnection {
     private static final int REQUEST_QUEUE_LIMIT = 300;
     private static final int FIRMWARE_IMAGE_MAXIMUM_BYTES = 16 << 20;
     static final String FIRMWARE_UPDATE = "Updating firmware";
+    static final String TRIP_SYNC = "Syncing trips";
+    // The original MOKUKU sends no reply to a directory listing longer than one notification.
+    private static final String NO_REPLY = "No reply";
+    private static final String PHONE_COPY_KEPT = " differs from the phone copy, which was kept";
     // The left eye restarts into its update with Bluetooth off; retry until it comes back.
     private static final long RECONNECT_WINDOW_MILLISECONDS = 5 * 60_000;
     private static final long RECONNECT_DELAY_MILLISECONDS = 3000;
@@ -93,6 +97,10 @@ final class MokukuConnection {
         final List<String> recordings;
         // Recording name to where this session saved it on the phone.
         final Map<String, String> saved;
+        // The trip being synced, such as "Trip 2 of 5 · trip_42.bin".
+        final String tripStatus;
+        // Changes whenever a trip is saved to the phone.
+        final int tripsVersion;
 
         Snapshot(MokukuConnection connection) {
             connected = connection.ready;
@@ -115,6 +123,8 @@ final class MokukuConnection {
             errors = Collections.unmodifiableMap(new HashMap<>(connection.errors));
             recordings = Collections.unmodifiableList(new ArrayList<>(connection.recordings));
             saved = Collections.unmodifiableMap(new HashMap<>(connection.saved));
+            tripStatus = connection.tripStatus;
+            tripsVersion = connection.tripsVersion;
         }
     }
 
@@ -123,14 +133,17 @@ final class MokukuConnection {
         final byte[] bytes;
         final int replyId;
         final boolean withoutResponse;
+        // A missing reply completes with NO_REPLY instead of dropping the connection.
+        final boolean replyOptional;
         final Reply callback;
         boolean written;
         byte[] reply;
-        Request(UUID characteristic, byte[] bytes, int replyId, boolean withoutResponse, Reply callback) {
+        Request(UUID characteristic, byte[] bytes, int replyId, boolean withoutResponse, boolean replyOptional, Reply callback) {
             this.characteristic = characteristic;
             this.bytes = bytes;
             this.replyId = replyId;
             this.withoutResponse = withoutResponse;
+            this.replyOptional = replyOptional;
             this.callback = callback;
         }
     }
@@ -146,6 +159,7 @@ final class MokukuConnection {
     private final Map<Integer, String> errors = new HashMap<>();
     private final Map<String, String> saved = new HashMap<>();
     private PhoneDownloads.Saver saver;
+    private final TripStore tripStore;
     private final ArrayDeque<Request> requests = new ArrayDeque<>();
     private List<String> recordings = new ArrayList<>();
     private volatile Listener listener;
@@ -182,6 +196,25 @@ final class MokukuConnection {
     private final ByteArrayOutputStream sectorBytes = new ByteArrayOutputStream();
     private int downloadRetries;
     private String downloadName;
+    private String downloadPath;
+    // Bytes the phone already has; the device sends the rest.
+    private long downloadOffset;
+    private long downloadPrefixCrc;
+    // Trip sync: numbers still to fetch, the trip being fetched (0 when none), and what happened.
+    private final ArrayDeque<Integer> tripQueue = new ArrayDeque<>();
+    private int tripNumber;
+    // The original MOKUKU could not list its trips: fetch newer numbers until one is missing.
+    private boolean tripProbing;
+    private int tripsPlanned;
+    private int tripsFetched;
+    private int tripsAdded;
+    private int tripsExtended;
+    private final List<String> tripProblems = new ArrayList<>();
+    // The highest trip number MOKUKU has, and whether to delete its older trips after the sync.
+    private int tripsNewestOnDevice;
+    private boolean tripsDeleteOlder;
+    private String tripStatus;
+    private int tripsVersion;
     private byte[] firmwareImage;
     private int packetSize;
     private long downloadStartedAt;
@@ -203,6 +236,13 @@ final class MokukuConnection {
     private final Runnable reconnect = () -> { if (gatt == null) openGatt(); };
     private final Runnable connectionTimeout = () -> disconnectOnWorker("Connection timed out. Try again.");
     private final Runnable requestTimeout = () -> {
+        if (active != null && active.written && active.replyOptional) {
+            Request unanswered = active;
+            active = null;
+            unanswered.callback.complete(null, NO_REPLY);
+            pump();
+            return;
+        }
         if (active != null) Log.w(TAG, "Request timed out: replyId=" + active.replyId
                 + ", writeComplete=" + active.written + ", replyReceived=" + (active.reply != null)
                 + ", offset=" + received + ", mtu=" + mtu);
@@ -217,6 +257,7 @@ final class MokukuConnection {
         thread.start();
         worker = new Handler(thread.getLooper());
         saver = PhoneDownloads.forContext(context);
+        tripStore = new TripStore(this.context);
         snapshot = new Snapshot(this);
         worker.post(() -> {
             android.content.SharedPreferences preferences = this.context.getSharedPreferences("device", Context.MODE_PRIVATE);
@@ -502,10 +543,14 @@ final class MokukuConnection {
     }
 
     private void request(UUID characteristic, byte[] bytes, int replyId, boolean withoutResponse, Reply callback) {
+        request(characteristic, bytes, replyId, withoutResponse, false, callback);
+    }
+
+    private void request(UUID characteristic, byte[] bytes, int replyId, boolean withoutResponse, boolean replyOptional, Reply callback) {
         if (!ready) { callback.complete(null, "Connect to MOKUKU first."); return; }
         if (bytes.length > mtu - 3) { callback.complete(null, "Bluetooth packet size is too small for this setting. Reconnect and try again."); return; }
         if (requests.size() >= REQUEST_QUEUE_LIMIT) { callback.complete(null, "Wait for the current requests to finish."); return; }
-        requests.add(new Request(characteristic, bytes, replyId, withoutResponse, callback));
+        requests.add(new Request(characteristic, bytes, replyId, withoutResponse, replyOptional, callback));
         pump();
     }
 
@@ -732,14 +777,16 @@ final class MokukuConnection {
         });
     }
 
-    void setRecordingAccessCode(String code) {
+    /** Saves the code for this device, then syncs trips or refreshes recordings. */
+    void setRecordingAccessCode(String code, boolean thenSyncTrips) {
         worker.post(() -> {
             if (!canStart()) return;
             try {
                 MokukuProtocol.stringMessage(44, code, 255);
                 recordingAccessPreferences.edit().putString(address, code).apply();
                 recordingAccessCode = code;
-                refreshRecordings();
+                if (thenSyncTrips) syncTrips(false);
+                else refreshRecordings();
             } catch (IllegalArgumentException exception) { report(exception.getMessage()); }
         });
     }
@@ -766,11 +813,18 @@ final class MokukuConnection {
     }
 
     private void list(Names callback) {
-        String directory = MokukuProtocol.recordDirectory(mokukuII);
+        listNames(MokukuProtocol.recordDirectory(mokukuII), (names, error) -> callback.complete(error == null ? MokukuProtocol.recordings(names)
+                : null, NO_REPLY.equals(error) ? "MOKUKU returned no list: it may hold more recordings than one reply fits." : error));
+    }
+
+    // A directory's names. The original MOKUKU replies nothing (NO_REPLY) when they do not fit one
+    // notification, or without the access code.
+    private void listNames(String directory, Names callback) {
         if (mokukuII) { listFrom(new ArrayList<>(), directory, callback); return; }
-        send(MokukuProtocol.stringMessage(60, directory, 255), (reply, error) -> {
-            if (error != null) callback.complete(null, error);
-            else callback.complete(MokukuProtocol.recordings(Arrays.asList(MokukuProtocol.textReply(reply, 60).split(","))), null);
+        request(MokukuProtocol.MESSAGE, MokukuProtocol.stringMessage(60, directory, 255), 60, false, true, (reply, error) -> {
+            if (error != null) { callback.complete(null, error); return; }
+            try { callback.complete(Arrays.asList(MokukuProtocol.textReply(reply, 60).split(",")), null); }
+            catch (IllegalArgumentException exception) { callback.complete(null, exception.getMessage()); }
         });
     }
 
@@ -779,7 +833,7 @@ final class MokukuConnection {
         send(MokukuProtocol.listDirectory(names.size(), directory), (reply, error) -> {
             if (error != null) { callback.complete(null, error); return; }
             List<String> page = MokukuProtocol.directoryNames(MokukuProtocol.propertyValue(reply));
-            if (page.isEmpty()) { callback.complete(MokukuProtocol.recordings(names), null); return; }
+            if (page.isEmpty()) { callback.complete(names, null); return; }
             names.addAll(page);
             listFrom(names, directory, callback);
         });
@@ -899,25 +953,45 @@ final class MokukuConnection {
                 if (id != operationId) return;
                 if (error != null) { endOperation(error); return; }
                 try {
-                    File directory = recordingDirectory();
-                    if (!directory.isDirectory() && !directory.mkdirs()) throw new IOException("Could not create the phone recording folder.");
-                    partial = File.createTempFile("download-", ".partial", directory);
-                    output = new BufferedOutputStream(new FileOutputStream(partial));
-                } catch (IOException exception) { endOperation(exception.getMessage()); return; }
+                    downloadPath = MokukuProtocol.recordPath(name, mokukuII);
+                    openPartial(null);
+                } catch (IOException | IllegalArgumentException exception) { endOperation(exception.getMessage()); return; }
                 startDownload(id);
             });
         });
     }
 
+    // The download lands in a partial file, starting as a copy of the phone's bytes when resuming.
+    private void openPartial(File resumed) throws IOException {
+        File directory = recordingDirectory();
+        if (!directory.isDirectory() && !directory.mkdirs()) throw new IOException("Could not create the phone download folder.");
+        partial = File.createTempFile("download-", ".partial", directory);
+        output = new BufferedOutputStream(new FileOutputStream(partial));
+        downloadOffset = 0;
+        downloadPrefixCrc = 0;
+        if (resumed != null) {
+            byte[] bytes = TripStore.read(resumed);
+            output.write(bytes);
+            downloadOffset = bytes.length;
+            downloadPrefixCrc = MokukuProtocol.crc16(bytes, 0, bytes.length, 0);
+        }
+    }
+
+    private void discardPartial() {
+        if (output != null) {
+            try { output.close(); } catch (IOException ignored) {}
+            output = null;
+        }
+        if (partial != null) { partial.delete(); partial = null; }
+    }
+
     private void startDownload(int id) {
         if (id != operationId) return;
-        try {
-            request(MokukuProtocol.FILE_COMMAND, MokukuProtocol.startDownload(MokukuProtocol.recordPath(downloadName, mokukuII)), -1, (reply, error) -> {
-                if (id == operationId && error != null) endOperation(error);
-            });
-            worker.removeCallbacks(sectorTimeout);
-            worker.postDelayed(sectorTimeout, SECTOR_TIMEOUT_MILLISECONDS);
-        } catch (IllegalArgumentException exception) { endOperation(exception.getMessage()); }
+        request(MokukuProtocol.FILE_COMMAND, MokukuProtocol.startDownload(downloadPath, downloadOffset), -1, (reply, error) -> {
+            if (id == operationId && error != null) endOperation(error);
+        });
+        worker.removeCallbacks(sectorTimeout);
+        worker.postDelayed(sectorTimeout, SECTOR_TIMEOUT_MILLISECONDS);
     }
 
     private void acceptDownloadStart(byte[] frame) {
@@ -925,9 +999,14 @@ final class MokukuConnection {
         try {
             long[] started = MokukuProtocol.downloadStarted(frame);
             if (started == null) return;
+            tripsNewestOnDevice = Math.max(tripsNewestOnDevice, tripNumber);
+            // A different prefix means MOKUKU reused the number (its counter was erased).
+            if (tripNumber != 0 && started[2] != downloadPrefixCrc) { skipTrip(PHONE_COPY_KEPT); return; }
+            if (tripNumber != 0 && started[0] == downloadOffset) { skipTrip(null); return; }
             if (started[0] == 0) throw new IOException("The recording is empty.");
-            if (started[0] > recordingDirectory().getUsableSpace()) throw new IOException("Not enough free phone storage.");
+            if (started[0] - downloadOffset > recordingDirectory().getUsableSpace()) throw new IOException("Not enough free phone storage.");
             total = started[0];
+            received = downloadOffset;
             sectorSize = started[1];
             sector = 0;
             downloadRetries = 0;
@@ -940,10 +1019,23 @@ final class MokukuConnection {
         } catch (IllegalStateException refused) {
             // MOKUKU applies the access code on another task, so the first start can race it.
             worker.removeCallbacks(sectorTimeout);
-            if (mokukuII) endOperation("MOKUKU II refused the recording. Refresh recordings and try again.");
-            else if (++downloadRetries > DOWNLOAD_RETRY_LIMIT) endOperation(refused.getMessage());
-            else worker.postDelayed(startDownloadAgain, START_RETRY_MILLISECONDS);
+            if (!mokukuII && ++downloadRetries <= DOWNLOAD_RETRY_LIMIT) worker.postDelayed(startDownloadAgain, START_RETRY_MILLISECONDS);
+            // A refused offset: the device file is shorter than the phone's copy.
+            else if (tripNumber != 0 && downloadOffset > 0) skipTrip(PHONE_COPY_KEPT);
+            else endOperation(mokukuII && tripNumber == 0 ? "MOKUKU II refused the recording. Refresh recordings and try again." : refused.getMessage());
+        } catch (java.io.FileNotFoundException missing) {
+            if (tripNumber == 0) { endOperation(missing.getMessage()); return; }
+            // MOKUKU deletes old trips for space, and a missing probed number ends probing.
+            if (downloadOffset == 0 && tripProbing) tripQueue.clear();
+            skipTrip(downloadOffset == 0 && !tripProbing ? " could not be read" : null);
         } catch (IOException | IllegalArgumentException exception) { endOperation(exception.getMessage()); }
+    }
+
+    // Moves on to the next trip, noting the problem after the trip's name.
+    private void skipTrip(String problem) {
+        worker.removeCallbacks(sectorTimeout);
+        if (problem != null) tripProblems.add(TripStore.name(tripNumber) + problem);
+        nextTrip(false);
     }
 
     private void resetSector() {
@@ -977,11 +1069,17 @@ final class MokukuConnection {
             acknowledge(sector - 1, MokukuProtocol.SECTOR_OK);
             if (received < total) { publish(); return; }
             output.close(); output = null;
+            if (tripNumber != 0) {
+                tripStore.save(address, name, tripNumber, partial);
+                partial = null;
+                nextTrip(true);
+                return;
+            }
             String location = saver.save(partial, downloadName);
             saved.put(downloadName, location);
             endOperation("Saved " + downloadName + " to " + location + ".");
         } catch (IOException exception) {
-            endOperation("Could not save the recording: " + exception.getMessage());
+            endOperation((tripNumber != 0 ? "Could not save the trip: " : "Could not save the recording: ") + exception.getMessage());
         } catch (SecurityException exception) {
             endOperation("Allow storage access to save recordings to Downloads.");
         }
@@ -1109,6 +1207,114 @@ final class MokukuConnection {
         sendFirmwareSector();
     }
 
+    /**
+     * Downloads the trips this phone does not have, and the rest of its newest trip from this device;
+     * then, with deleteOlder, deletes every trip on MOKUKU but the newest, unless a trip failed to sync.
+     */
+    void syncTrips(boolean deleteOlder) {
+        worker.post(() -> {
+            if (!canStart()) return;
+            if (fileData == null) { report("Update MOKUKU's firmware to sync trips."); return; }
+            operation = TRIP_SYNC;
+            operationCancellable = true;
+            received = 0;
+            total = 0;
+            tripsPlanned = tripsFetched = tripsAdded = tripsExtended = tripsNewestOnDevice = 0;
+            tripsDeleteOlder = deleteOlder;
+            tripProblems.clear();
+            tripProbing = false;
+            tripStatus = "Looking for trips on " + name + "…";
+            int id = ++operationId;
+            setDownloadPriority(true);
+            publish();
+            authorize((reply, error) -> {
+                if (id != operationId) return;
+                if (error != null) { endOperation(error); return; }
+                // Without a listing, a missing access code shows as the first download's refusal.
+                listNames(MokukuProtocol.tripDirectory(mokukuII), (names, failure) -> {
+                    if (id != operationId) return;
+                    if (NO_REPLY.equals(failure)) names = null;
+                    else if (failure != null) {
+                        endOperation(mokukuII ? "No trips on MOKUKU II yet, or its SD card is unavailable." : failure); return;
+                    }
+                    planTrips(names);
+                    nextTrip(false);
+                });
+            });
+        });
+    }
+
+    // Queues the device's trips the phone lacks, after its newest phone trip, whose rest MOKUKU may
+    // have recorded since. Without a listing, probes numbers above the newest phone trip.
+    private void planTrips(List<String> listed) {
+        tripQueue.clear();
+        List<Integer> saved = tripStore.numbers(address);
+        int newest = saved.isEmpty() ? 0 : saved.get(saved.size() - 1);
+        if (listed == null) {
+            tripProbing = true;
+            if (newest > 0) tripQueue.add(newest);
+            tripQueue.add(newest + 1);
+            return;
+        }
+        List<Integer> numbers = new ArrayList<>();
+        for (String listedName : listed) {
+            int number = TripStore.number(listedName.trim());
+            if (number > 0 && !numbers.contains(number)) numbers.add(number);
+        }
+        Collections.sort(numbers);
+        if (!numbers.isEmpty()) tripsNewestOnDevice = numbers.get(numbers.size() - 1);
+        if (numbers.contains(newest)) tripQueue.add(newest);
+        for (int number : numbers) if (!saved.contains(number)) tripQueue.add(number);
+        tripsPlanned = tripQueue.size();
+    }
+
+    // Fetches the next queued trip; saved says whether the last one was saved.
+    private void nextTrip(boolean saved) {
+        if (tripNumber != 0 && saved) {
+            if (downloadOffset == 0) tripsAdded++;
+            else tripsExtended++;
+        }
+        discardPartial();
+        // A probed number that exists leads to the next one.
+        if (tripProbing && tripNumber != 0 && tripQueue.isEmpty() && (saved || downloadOffset > 0)) tripQueue.add(tripNumber + 1);
+        received = 0;
+        total = 0;
+        downloadRetries = 0;
+        if (tripQueue.isEmpty()) { finishTripSync(); return; }
+        tripNumber = tripQueue.removeFirst();
+        tripsFetched++;
+        tripStatus = (tripsPlanned > 0 ? "Trip " + tripsFetched + " of " + tripsPlanned : "Trip " + tripsFetched) + " · " + TripStore.name(tripNumber);
+        File local = tripStore.file(address, tripNumber);
+        try {
+            downloadPath = MokukuProtocol.tripDirectory(mokukuII) + "/" + TripStore.name(tripNumber);
+            openPartial(local.isFile() ? local : null);
+        } catch (IOException exception) { endOperation("Could not prepare the trip download: " + exception.getMessage()); return; }
+        downloadStartedAt = 0;
+        publish();
+        startDownload(operationId);
+    }
+
+    private void finishTripSync() {
+        int added = tripsAdded, extended = tripsExtended;
+        String result = added == 0 && extended == 0 ? "This phone already has every trip from " + name + "."
+                : "Synced " + name + ": " + added + (added == 1 ? " new trip" : " new trips")
+                + (extended == 0 ? "" : ", " + extended + " continued") + ".";
+        if (!tripProblems.isEmpty()) result += " " + String.join("; ", tripProblems) + ".";
+        if (!tripsDeleteOlder) { endOperation(result); return; }
+        if (!tripProblems.isEmpty()) { endOperation(result + " Nothing was deleted, because not every trip synced."); return; }
+        int newest = tripsNewestOnDevice;
+        if (newest <= 1) { endOperation(result + " MOKUKU has no older trips to delete."); return; }
+        String synced = result;
+        tripStatus = "Deleting trips on " + name + "…";
+        publish();
+        int id = operationId;
+        send(MokukuProtocol.deleteTrips(mokukuII, 1, newest - 1), (reply, error) -> {
+            if (id != operationId) return;
+            endOperation(synced + (error == null ? " Deleted the trips on MOKUKU except " + TripStore.name(newest) + "."
+                    : " Deleting trips failed: " + error));
+        });
+    }
+
     void cancelOperation() {
         worker.post(() -> {
             if (operationCancellable) endOperation("Operation canceled. Completed phone copies are kept.");
@@ -1140,11 +1346,12 @@ final class MokukuConnection {
             request(MokukuProtocol.FILE_COMMAND, MokukuProtocol.stopTransfer(), -1, (reply, error) -> {});
         }
         firmwareImage = null;
-        if (output != null) {
-            try { output.close(); } catch (IOException ignored) {}
-            output = null;
-        }
-        if (partial != null) { partial.delete(); partial = null; }
+        // One reload of the phone's trips per sync.
+        if (TRIP_SYNC.equals(operation) && tripsAdded + tripsExtended > 0) tripsVersion++;
+        tripNumber = 0;
+        tripQueue.clear();
+        tripStatus = null;
+        discardPartial();
         operation = null;
         operationCancellable = false;
         received = 0;

@@ -50,20 +50,26 @@ public class MokukuProtocolTest {
 
     @Test public void framesSectorTransferCommandsWithCrc() {
         assertEquals(0x31c3, MokukuProtocol.crc16("123456789".getBytes(StandardCharsets.US_ASCII), 0, 9, 0));
-        byte[] start = MokukuProtocol.startDownload("/sd/record/mobili_1.record");
+        byte[] start = MokukuProtocol.startDownload("/sd/record/mobili_1.record", 0x01020304);
         byte[] body = MokukuProtocol.withoutCrc(start, start.length);
         assertNotNull(body);
         assertEquals(MokukuProtocol.COMMAND_START_DOWNLOAD, body[0]);
+        assertEquals(0x01020304, ByteBuffer.wrap(body, 2, 4).order(ByteOrder.LITTLE_ENDIAN).getInt());
         assertEquals("/sd/record/mobili_1.record", new String(body, 6, body.length - 6, StandardCharsets.UTF_8));
         start[3] ^= 1;
         assertNull(MokukuProtocol.withoutCrc(start, start.length));
         assertArrayEquals(new byte[] {2, 0, 1, 0, 3, 0}, MokukuProtocol.withoutCrc(MokukuProtocol.acknowledgement(2, 1, 3), 8));
     }
 
-    @Test public void decodesDownloadStartRepliesAndRefusals() {
-        assertArrayEquals(new long[] {1000, 4096}, MokukuProtocol.downloadStarted(startReply(0, 1000, 4096)));
+    @Test public void encodesTripDeletionRanges() {
+        assertArrayEquals(new byte[] {58, 1, 0, 0, 0, 0x29, 1, 0, 0}, MokukuProtocol.deleteTrips(false, 1, 297));
+        assertArrayEquals(new byte[] {2, 17, 1, 0, 0, 0, 0x29, 1, 0, 0}, MokukuProtocol.deleteTrips(true, 1, 297));
+    }
+
+    @Test public void decodesDownloadStartRepliesAndRefusals() throws Exception {
+        assertArrayEquals(new long[] {1000, 4096, 0xbeef}, MokukuProtocol.downloadStarted(startReply(0, 1000, 4096)));
         assertThrows(IllegalStateException.class, () -> MokukuProtocol.downloadStarted(startReply(1, 0, 0)));
-        assertThrows(IllegalArgumentException.class, () -> MokukuProtocol.downloadStarted(startReply(2, 0, 0)));
+        assertThrows(java.io.FileNotFoundException.class, () -> MokukuProtocol.downloadStarted(startReply(2, 0, 0)));
         byte[] corrupt = startReply(0, 1000, 4096);
         corrupt[7] ^= 1;
         assertNull(MokukuProtocol.downloadStarted(corrupt));
@@ -71,7 +77,7 @@ public class MokukuProtocolTest {
 
     private static byte[] startReply(int status, int size, int sectorSize) {
         byte[] frame = ByteBuffer.allocate(18).order(ByteOrder.LITTLE_ENDIAN).putShort((short) 3).putShort((short) 2)
-                .putShort((short) status).putInt(size).putInt(sectorSize).putShort((short) 0).array();
+                .putShort((short) status).putInt(size).putInt(sectorSize).putShort((short) 0xbeef).array();
         int crc = MokukuProtocol.crc16(frame, 0, 16, 0);
         frame[16] = (byte) crc;
         frame[17] = (byte) (crc >> 8);

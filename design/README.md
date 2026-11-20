@@ -16,7 +16,7 @@ download, update, and debug interactions are demonstrations only.
 Screen previews: [Home](previews/home.png), [Data Collection](previews/data-collection.png),
 [Tools](previews/tools.png), [Updates](previews/updates.png),
 [Debug](previews/debug.png), [Simulation](previews/simulation.png),
-and [Trips](previews/trips.png).
+[Trips](previews/trips.png), [Trips sync](previews/trips-sync.png), and [Trip map](previews/trip.png).
 
 Native Android previews, rendered with Robolectric in the disconnected state:
 [Home](previews/native-home.png), [320 dp Home](previews/native-home-small.png),
@@ -24,6 +24,8 @@ Native Android previews, rendered with Robolectric in the disconnected state:
 [Data Collection](previews/native-records.png), and [320 dp Data Collection](previews/native-records-small.png).
 Blank access-code dialogs: [390 dp](previews/native-access-code.png),
 [320 dp](previews/native-access-code-small.png).
+Sample trips: [Trips](previews/native-trips.png), [sync](previews/native-trips-sync.png), and
+[trip](previews/native-trip.png), whose map shows no tiles because tests have no network.
 Sample download-progress previews: [390 dp](previews/native-download.png),
 [320 dp](previews/native-download-small.png). These use simulated transfer values.
 All native previews validate layout only; they do not demonstrate a hardware connection.
@@ -62,18 +64,18 @@ small displays. Use 160–220 ms transitions; no blinking recording indicator.
 ## Navigation
 
 ```text
-Home                    Data Collection          Trips             Tools
-├── Find / connect      ├── Device recordings     └── Coming later   ├── Updates
-├── Device information  ├── Download / cancel                       └── Debug
-└── Simulation          └── Delete / clear all / confirm
+Home                    Data Collection          Trips                Tools
+├── Find / connect      ├── Device recordings     ├── Sync trips       ├── Updates
+├── Device information  ├── Download / cancel     ├── Trips by device  └── Debug
+└── Simulation          └── Delete / clear all /  └── Trip → map
+                            confirm
 ```
 
 Keep four labeled bottom tabs: **Home**, **Data Collection**, **Trips**, and
-**Tools**. Simulation returns to Home; Updates and Debug return to Tools. Subpages
+**Tools**. Simulation returns to Home; Trip returns to Trips; Updates and Debug return to Tools. Subpages
 use a back arrow and hide the bottom tabs, preserving their parent's scroll position
 on return. Android Back closes the current sheet or confirmation first, then the
-subpage, then returns to Home from another tab. The Trips tab has a restrained
-empty state; it contains no invented trips.
+subpage, then returns to Home from another tab.
 
 ## Home
 
@@ -192,6 +194,41 @@ separately. Keep the list refreshable after an interrupted clear-all. The direct
 can be truncated by the firmware; label it **Returned recordings**, rather than
 claiming the list is complete when that cannot be verified.
 
+## Trips
+
+Trips are the drives MOKUKU records to its SD card
+([trip format](../../doc/TRIP_RECORDING.md) in MobiliMOKUKU). The phone keeps its own copies
+in app-private storage, so the Trips tab works offline and while disconnected.
+
+Place a sync card first. Connected, it names the device and offers **Sync trips**, which
+downloads every trip on MOKUKU that the phone does not have, plus the rest of the newest phone
+trip in case MOKUKU was still recording it. Syncing never deletes device or phone trips.
+Below it, **Delete older trips on MOKUKU** (destructive style) confirms, syncs, then deletes
+every trip on MOKUKU except the latest by number range; phone copies stay, and nothing is
+deleted if any trip fails to sync. Disconnected, the card says **Connect to download new trips**
+and disables both buttons. The
+original MOKUKU needs the Data Collection access code; without one, **Sync trips** opens the
+access-code dialog. While syncing, show **Trip 2 of 5** with the device filename, the
+download progress, and **Cancel**; trips already saved stay. Finish with how many trips were
+added, or that the phone already has every trip.
+
+Below, group the phone's trips by device: a heading with the device name, trip count, and BLE
+address in monospace, then the trips newest first. The connected MOKUKU's group comes first,
+tinted mint with a **Connected** label; other devices follow by their newest trip. Each row is a button with a small route
+thumbnail, the local start date and time, and distance · duration. Each group ends with
+**Delete N trips from phone** (destructive style), which confirms and removes that device's
+phone copies; it works disconnected but not during a sync. With no trips, show the
+empty state: **No trips on this phone yet**.
+
+Opening a trip shows the **Trip** subpage: the start date as the title, the start time and
+device below it, then the route drawn on an OpenStreetMap map, fitted to the trip, with a mint
+start ring and a warm end dot and a **Start** / **End** legend. The map pans and zooms and shows
+the OpenStreetMap attribution; without internet the route still draws over blank tiles. Below
+the map, a two-column grid shows distance, duration, average speed, and top GPS speed, then the
+source filename and **Delete from phone**, which confirms, deletes the phone copy, and returns
+to Trips. A deleted trip still on MOKUKU downloads again on the next sync. Draw the route only from records whose CRC passes; a trip cut short by power
+loss ends at its last good record.
+
 ## Implementation after design review
 
 1. Apply the approved tokens and native navigation; preserve system Back, insets,
@@ -200,7 +237,8 @@ claiming the list is complete when that cannot be verified.
    writes; query Home information after subscription succeeds.
 3. Implement controls and file transfer using [the protocol map](PROTOCOL_MAP.md),
    with real timeout, disconnect, and retry states.
-4. Keep Trips as the empty state until trip storage and visualization are specified.
+4. Implement Trips: sync over the shared file transfer, app-private storage per device,
+   and the trip map.
 
 Review the screenshot and prototype for hierarchy, spacing, labels, and screen
 flows. Visual sample data is not a source of protocol values or device behavior.

@@ -42,6 +42,10 @@ final class MokukuProtocol {
         return mokukuII ? "/sdcard/record" : "/sd/record";
     }
 
+    static String tripDirectory(boolean mokukuII) {
+        return mokukuII ? "/sdcard/trip" : "/sd/trip";
+    }
+
     static byte[] utf8(String value, int maximumBytes) {
         byte[] text = value.getBytes(StandardCharsets.UTF_8);
         if (text.length == 0 || text.length > maximumBytes || text.length > 255 || value.indexOf('\0') >= 0) {
@@ -146,6 +150,7 @@ final class MokukuProtocol {
     static final int PROPERTY_DELETE_RECORDINGS = 13;
     static final int PROPERTY_PANEL_ACTION = 15;
     static final int PROPERTY_FIRMWARE_SLOTS = 16;
+    static final int PROPERTY_DELETE_TRIPS = 17;
     static final int PROPERTY_ROLLBACK = 200;
     static final int MOKUKU_II_STRING_MAXIMUM_BYTES = 64;
 
@@ -157,6 +162,13 @@ final class MokukuProtocol {
         byte[] text = path.getBytes(StandardCharsets.UTF_8);
         return property(TYPE_GET, PROPERTY_DIRECTORY, ByteBuffer.allocate(text.length + 2)
                 .order(ByteOrder.LITTLE_ENDIAN).putShort((short) first).put(text).array());
+    }
+
+    /** Deletes MOKUKU's trips first to last (inclusive); MOKUKU keeps the trip it is recording. */
+    static byte[] deleteTrips(boolean mokukuII, int first, int last) {
+        ByteBuffer range = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putInt(first).putInt(last);
+        if (mokukuII) return property(TYPE_SET, PROPERTY_DELETE_TRIPS, range.array());
+        return ByteBuffer.allocate(9).put((byte) 58).put(range.array()).array();
     }
 
     /** The value of a MOKUKU II set/get reply; throws with the reason for a result other than OK. */
@@ -211,6 +223,7 @@ final class MokukuProtocol {
     static final int COMMAND_START_FIRMWARE_UPDATE = 200;
     static final int COMMAND_ACCEPTED = 0;
     static final int COMMAND_INVALID = 1;
+    static final int COMMAND_UNAVAILABLE = 2;
     static final int SECTOR_OK = 0;
     static final int SECTOR_CRC_ERROR = 1;
     static final int SECTOR_WRITE_ERROR = 3;
@@ -245,10 +258,11 @@ final class MokukuProtocol {
                 .putShort((short) COMMAND_START_FIRMWARE_UPDATE).putInt(size));
     }
 
-    static byte[] startDownload(String path) {
+    /** Starts a download at offset, the number of bytes the phone already has. */
+    static byte[] startDownload(String path, long offset) {
         byte[] text = path.getBytes(StandardCharsets.UTF_8);
         return withCrc(ByteBuffer.allocate(text.length + 8).order(ByteOrder.LITTLE_ENDIAN)
-                .putShort((short) COMMAND_START_DOWNLOAD).putInt(0).put(text));
+                .putShort((short) COMMAND_START_DOWNLOAD).putInt((int) offset).put(text));
     }
 
     static byte[] stopTransfer() {
@@ -270,19 +284,21 @@ final class MokukuProtocol {
     }
 
     /**
-     * File size and sector size from an accepted start-download reply; null for other frames.
-     * Throws with the refusal when the device refused.
+     * File size, sector size, and the CRC of the bytes before the offset from an accepted
+     * start-download reply; null for other frames. Throws with the refusal when the device refused:
+     * FileNotFoundException when the file cannot be opened.
      */
-    static long[] downloadStarted(byte[] frame) {
+    static long[] downloadStarted(byte[] frame) throws java.io.FileNotFoundException {
         ByteBuffer buffer = commandReply(frame, COMMAND_START_DOWNLOAD);
         if (buffer == null) return null;
         int status = buffer.getShort(4) & 0xffff;
-        if (status == COMMAND_INVALID) throw new IllegalStateException("MOKUKU refused the recording. Check the access code.");
-        if (status != COMMAND_ACCEPTED || buffer.limit() < 16) throw new IllegalArgumentException("The recording is missing or unreadable.");
+        if (status == COMMAND_INVALID) throw new IllegalStateException("MOKUKU refused the file. Check the access code.");
+        if (status == COMMAND_UNAVAILABLE) throw new java.io.FileNotFoundException("The file is missing or unreadable.");
+        if (status != COMMAND_ACCEPTED || buffer.limit() < 16) throw new IllegalArgumentException("Invalid download reply.");
         long size = buffer.getInt(6) & 0xffffffffL;
         long sectorSize = buffer.getInt(10) & 0xffffffffL;
-        if (size > Integer.MAX_VALUE || sectorSize == 0) throw new IllegalArgumentException("The recording is too large.");
-        return new long[] {size, sectorSize};
+        if (size > Integer.MAX_VALUE || sectorSize == 0) throw new IllegalArgumentException("The file is too large.");
+        return new long[] {size, sectorSize, buffer.getShort(14) & 0xffff};
     }
 
     /** Sector size and largest packet from an accepted firmware-update reply; null for other frames. */

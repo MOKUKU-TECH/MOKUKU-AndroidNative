@@ -146,6 +146,33 @@ h1 em { font-style: normal; color: var(--mint); }
 .orbit { position: absolute; inset: 0; border: 1px solid var(--border); border-radius: 50%; transform: rotate(-25deg); }
 .orbit.inner { inset: 20px; border-color: #9ad8c21c; transform: rotate(25deg); }
 .trip-illustration .tiny-dot { position: absolute; top: 24px; right: 26px; }
+.trip-group { margin-top: 22px; }
+.trip-group .section-heading { margin: 0; }
+.trip-address { margin: 0 0 12px; font-size: 10px; }
+.trip-group.connected { padding: 14px 12px 12px; margin-left: -6px; margin-right: -6px; border: 1px solid #9ad8c240; border-radius: 22px; background: #9ad8c20a; }
+.trip-group.connected h3 { color: var(--mint); }
+.trip-group.connected .trip-card { border-color: #9ad8c22e; background: #172a2c; }
+.trip-group.connected .route-thumbnail { background: #1f3536; }
+.trip-list { display: grid; gap: 10px; }
+.trip-card { display: flex; align-items: center; gap: 14px; width: 100%; text-align: left; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 17px; padding: 10px 14px 10px 10px; min-height: 84px; }
+.trip-card > .icon:last-child { margin-left: auto; width: 16px; color: var(--secondary); }
+.trip-summary { display: grid; gap: 2px; min-width: 0; }
+.trip-summary strong { font-size: 14px; font-weight: 500; }
+.route-thumbnail { width: 64px; height: 64px; flex-shrink: 0; background: var(--raised); border-radius: 13px; }
+.route-thumbnail polyline, .route-map polyline { fill: none; stroke: var(--mint); stroke-linecap: round; stroke-linejoin: round; }
+.route-thumbnail polyline { stroke-width: 2; }
+.route-map polyline { stroke-width: 4; }
+.route-start { fill: var(--canvas); stroke: var(--mint); stroke-width: 2.5; }
+.route-end { fill: var(--warm); stroke: var(--canvas); stroke-width: 2; }
+.map-card { position: relative; overflow: hidden; margin: 0 -2px; border: 1px solid var(--border); border-radius: 20px; background-color: #111a22; background-image: linear-gradient(#1d293455 1px, transparent 1px), linear-gradient(90deg, #1d293455 1px, transparent 1px); background-size: 28px 28px; }
+.route-map { display: block; width: 100%; height: auto; }
+.map-note { position: absolute; left: 12px; top: 12px; right: 12px; font-size: 10px; color: var(--secondary); }
+.map-attribution { position: absolute; right: 10px; bottom: 8px; font-size: 9px; color: var(--secondary); }
+.map-legend { display: flex; gap: 18px; margin: 12px 4px 16px; font-size: 11px; color: var(--secondary); }
+.map-legend span { display: inline-flex; align-items: center; gap: 7px; }
+.map-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; }
+.map-legend .route-start { background: var(--canvas); border: 2px solid var(--mint); }
+.map-legend .route-end { background: var(--warm); }
 .coming-soon { border: 1px solid var(--border); border-radius: 20px; color: var(--secondary); font-size: 11px; padding: 8px 14px; }
 .storage-summary { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
 .storage-summary strong { display: block; font-size: 21px; font-weight: 450; margin: 9px 0 5px; }
