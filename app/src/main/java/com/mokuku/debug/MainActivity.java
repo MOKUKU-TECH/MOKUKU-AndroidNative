@@ -230,7 +230,9 @@ public final class MainActivity extends Activity {
             session.scroll.put(session.route, scroll.getScrollY());
             render();
         } else if ("trips".equals(session.route)) {
-            if (previous.busy != update.busy || previous.tripsVersion != update.tripsVersion || !java.util.Objects.equals(previous.tripStatus, update.tripStatus)) {
+            if (previous.busy != update.busy || previous.tripsVersion != update.tripsVersion || !java.util.Objects.equals(previous.tripStatus, update.tripStatus)
+                    || !java.util.Objects.equals(previous.information.get(MokukuProtocol.TRIP_RECORDING), update.information.get(MokukuProtocol.TRIP_RECORDING))
+                    || previous.errors.containsKey(MokukuProtocol.TRIP_RECORDING) != update.errors.containsKey(MokukuProtocol.TRIP_RECORDING)) {
                 session.scroll.put(session.route, scroll.getScrollY());
                 render();
             } else updateProgress();
@@ -869,6 +871,7 @@ public final class MainActivity extends Activity {
     private void trips() {
         intro("Trips", "Every drive with MOKUKU, kept on this phone.");
         syncCard();
+        if (snapshot.connected) tripRecordingCard();
         loadTrips();
         if (session.trips == null) { content.addView(ui.muted("Loading trips…")); return; }
         if (session.trips.isEmpty()) {
@@ -891,6 +894,16 @@ public final class MainActivity extends Activity {
             return current != 0 ? current : Long.compare(right.trips.get(0).log.startUnixMilliseconds, left.trips.get(0).log.startUnixMilliseconds);
         });
         for (TripStore.Device device : devices) tripGroup(device, device.address.equals(connected));
+    }
+
+    private void tripRecordingCard() {
+        LinearLayout card = ui.card(content);
+        card.addView(ui.text("Trip recording", 18, R.color.text_primary));
+        String state = information(MokukuProtocol.TRIP_RECORDING);
+        card.addView(ui.muted("Current: " + state + ". MOKUKU records trips only while this is on; it starts off."));
+        boolean on = "On".equals(state);
+        deviceButton(card, on ? "Turn off trip recording" : "Turn on trip recording", false, false,
+                () -> session.connection.setTripRecording(!on));
     }
 
     private void syncCard() {

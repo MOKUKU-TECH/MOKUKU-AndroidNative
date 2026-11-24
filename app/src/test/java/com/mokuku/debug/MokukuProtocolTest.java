@@ -66,6 +66,15 @@ public class MokukuProtocolTest {
         assertArrayEquals(new byte[] {2, 17, 1, 0, 0, 0, 0x29, 1, 0, 0}, MokukuProtocol.deleteTrips(true, 1, 297));
     }
 
+    @Test public void encodesAndDecodesTripRecording() {
+        assertArrayEquals(new byte[] {59, 1}, MokukuProtocol.setTripRecording(false, true));
+        assertArrayEquals(new byte[] {2, 18, 0}, MokukuProtocol.setTripRecording(true, false));
+        assertEquals("On", MokukuProtocol.tripRecording(new byte[] {59, 1, 1}));
+        assertThrows(IllegalArgumentException.class, () -> MokukuProtocol.tripRecording(new byte[] {59, 0}));
+        assertThrows(IllegalArgumentException.class, () -> MokukuProtocol.tripRecording(new byte[] {59, 1, 2}));
+        assertEquals("Off", MokukuProtocol.describeProperty(MokukuProtocol.PROPERTY_TRIP_RECORDING, new byte[] {0}));
+    }
+
     @Test public void decodesDownloadStartRepliesAndRefusals() throws Exception {
         assertArrayEquals(new long[] {1000, 4096, 0xbeef}, MokukuProtocol.downloadStarted(startReply(0, 1000, 4096)));
         assertThrows(IllegalStateException.class, () -> MokukuProtocol.downloadStarted(startReply(1, 0, 0)));

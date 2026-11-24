@@ -151,6 +151,9 @@ final class MokukuProtocol {
     static final int PROPERTY_PANEL_ACTION = 15;
     static final int PROPERTY_FIRMWARE_SLOTS = 16;
     static final int PROPERTY_DELETE_TRIPS = 17;
+    static final int PROPERTY_TRIP_RECORDING = 18;
+    // Message 59; also the information key for MOKUKU II property 18.
+    static final int TRIP_RECORDING = 59;
     static final int PROPERTY_ROLLBACK = 200;
     static final int MOKUKU_II_STRING_MAXIMUM_BYTES = 64;
 
@@ -169,6 +172,24 @@ final class MokukuProtocol {
         ByteBuffer range = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putInt(first).putInt(last);
         if (mokukuII) return property(TYPE_SET, PROPERTY_DELETE_TRIPS, range.array());
         return ByteBuffer.allocate(9).put((byte) 58).put(range.array()).array();
+    }
+
+    static byte[] setTripRecording(boolean mokukuII, boolean enabled) {
+        byte value = (byte) (enabled ? 1 : 0);
+        if (mokukuII) return property(TYPE_SET, PROPERTY_TRIP_RECORDING, new byte[] {value});
+        return new byte[] {TRIP_RECORDING, value};
+    }
+
+    /** The original MOKUKU's `59, 1, enabled` reply as display text. */
+    static String tripRecording(byte[] packet) {
+        textReply(packet, TRIP_RECORDING);
+        if (packet.length != 3) throw new IllegalArgumentException("Invalid trip recording state.");
+        return onOff(packet[2]);
+    }
+
+    private static String onOff(byte value) {
+        if (value != 0 && value != 1) throw new IllegalArgumentException("Invalid on/off state.");
+        return value == 0 ? "Off" : "On";
     }
 
     /** The value of a MOKUKU II set/get reply; throws with the reason for a result other than OK. */
@@ -201,8 +222,9 @@ final class MokukuProtocol {
                 return free + "/" + total;
             }
             case PROPERTY_OBD_ENABLED:
-                if (value.length != 1) throw new IllegalArgumentException("Invalid OBD state.");
-                return value[0] == 0 ? "Off" : "On";
+            case PROPERTY_TRIP_RECORDING:
+                if (value.length != 1) throw new IllegalArgumentException("Invalid on/off state.");
+                return onOff(value[0]);
             case PROPERTY_LANGUAGE: {
                 String language = new String(value, StandardCharsets.UTF_8);
                 return "en".equals(language) ? "English" : "cn".equals(language) ? "Mandarin" : language;

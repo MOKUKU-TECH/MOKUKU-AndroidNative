@@ -212,6 +212,10 @@ access-code dialog. While syncing, show **Trip 2 of 5** with the device filename
 download progress, and **Cancel**; trips already saved stay. Finish with how many trips were
 added, or that the phone already has every trip.
 
+Connected, a **Trip recording** card follows with the state MOKUKU reports (**On**, **Off**, or
+**Unavailable** on older firmware) and one button, **Turn on trip recording** or **Turn off trip
+recording**. MOKUKU saves the setting and starts with it off.
+
 Below, group the phone's trips by device: a heading with the device name, trip count, and BLE
 address in monospace, then the trips newest first. The connected MOKUKU's group comes first,
 tinted mint with a **Connected** label; other devices follow by their newest trip. Each row is a button with a small route
