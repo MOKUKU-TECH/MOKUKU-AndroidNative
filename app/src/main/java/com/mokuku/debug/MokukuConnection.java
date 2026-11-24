@@ -623,6 +623,7 @@ final class MokukuConnection {
             {MokukuProtocol.PROPERTY_VERSION, 3}, {MokukuProtocol.PROPERTY_MAC_ADDRESS, 4},
             {MokukuProtocol.PROPERTY_WAKE_WORD_MODEL, 57}, {MokukuProtocol.PROPERTY_LANGUAGE, MokukuProtocol.PROPERTY_LANGUAGE},
             {MokukuProtocol.PROPERTY_OBD_ENABLED, MokukuProtocol.PROPERTY_OBD_ENABLED},
+            {MokukuProtocol.PROPERTY_TRIP_RECORDING, MokukuProtocol.TRIP_RECORDING},
             {MokukuProtocol.PROPERTY_FIRMWARE_SLOTS, MokukuProtocol.PROPERTY_FIRMWARE_SLOTS}, {MokukuProtocol.PROPERTY_SD_CARD, 61}};
 
     private void refreshInformationOnWorker() {
@@ -631,7 +632,7 @@ final class MokukuConnection {
         if (mokukuII) {
             for (int[] query : MOKUKU_II_INFORMATION) queryInformation(query[0], query[1], query == MOKUKU_II_INFORMATION[MOKUKU_II_INFORMATION.length - 1]);
         } else {
-            int[] keys = {3, 4, 5, 57, 61};
+            int[] keys = {3, 4, 5, 57, MokukuProtocol.TRIP_RECORDING, 61};
             for (int key : keys) queryInformation(key, key, key == keys[keys.length - 1]);
         }
     }
@@ -645,7 +646,9 @@ final class MokukuConnection {
                     String value;
                     if (mokukuII) value = MokukuProtocol.describeProperty(property, MokukuProtocol.propertyValue(reply));
                     else {
-                        value = key == 57 ? MokukuProtocol.voiceModel(reply) : MokukuProtocol.textReply(reply, key);
+                        value = key == 57 ? MokukuProtocol.voiceModel(reply)
+                                : key == MokukuProtocol.TRIP_RECORDING ? MokukuProtocol.tripRecording(reply)
+                                : MokukuProtocol.textReply(reply, key);
                         if (key == 61) MokukuProtocol.storage(reply);
                     }
                     if (value.isEmpty()) throw new IllegalArgumentException("No information returned.");
@@ -702,6 +705,20 @@ final class MokukuConnection {
         Runnable accepted = property == MokukuProtocol.PROPERTY_OBD_ENABLED
                 ? () -> queryInformation(property, property, false) : null;
         perform(set(property, value), label, restarting, accepted);
+    }
+
+    /** Turns trip recording on or off; an accepted set confirms the new state. */
+    void setTripRecording(boolean enabled) {
+        worker.post(() -> {
+            if (!canStart()) return;
+            send(MokukuProtocol.setTripRecording(mokukuII, enabled), (reply, error) -> {
+                if (error == null) {
+                    information.put(MokukuProtocol.TRIP_RECORDING, enabled ? "On" : "Off");
+                    errors.remove(MokukuProtocol.TRIP_RECORDING);
+                }
+                report(error == null ? "Trip recording turned " + (enabled ? "on." : "off.") : error);
+            });
+        });
     }
 
     private void perform(byte[] packet, String label, boolean restarting, Runnable accepted) {
