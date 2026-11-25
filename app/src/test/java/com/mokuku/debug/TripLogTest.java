@@ -27,9 +27,19 @@ public class TripLogTest {
     }
 
     private static byte[] point(int timeMilliseconds, int eastDecimeters, int northDecimeters, int speedCentimetersPerSecond) {
+        return point(timeMilliseconds, eastDecimeters, northDecimeters, speedCentimetersPerSecond, 255);
+    }
+
+    private static byte[] point(int timeMilliseconds, int eastDecimeters, int northDecimeters, int speedCentimetersPerSecond, int obdKmh) {
         return withCrc(ByteBuffer.allocate(TripLog.POINT_SIZE).order(ByteOrder.LITTLE_ENDIAN)
                 .put((byte) 0).putInt(timeMilliseconds).putInt(eastDecimeters).putInt(northDecimeters).putInt(0)
-                .putShort((short) speedCentimetersPerSecond).put((byte) 255).putShort((short) -32768).put((byte) 9).put((byte) 12));
+                .putShort((short) speedCentimetersPerSecond).put((byte) obdKmh).putShort((short) -32768).put((byte) 9).put((byte) 12));
+    }
+
+    @Test public void routeSpeedPrefersObdOverGps() {
+        TripLog log = TripLog.parse(trip(header(), point(0, 0, 0, 1000, 50), point(1000, 100, 0, 1000)));
+        assertEquals(50, log.speedKmh[0], 1e-9);
+        assertEquals(36, log.speedKmh[1], 1e-9);
     }
 
     private static byte[] trip(byte[]... parts) {

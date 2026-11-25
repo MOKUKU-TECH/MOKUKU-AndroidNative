@@ -9,6 +9,12 @@
     <color name="text_secondary">#A2B2BE</color>
     <color name="warm">#E4BA83</color>
     <color name="danger">#F0A19B</color>
+    <!-- Route speed bands, slow to fast: a rainbow from blue to red. -->
+    <color name="speed_1">#3B82F6</color>
+    <color name="speed_2">#22D3EE</color>
+    <color name="speed_3">#4ADE80</color>
+    <color name="speed_4">#FACC15</color>
+    <color name="speed_5">#EF4444</color>
     <!-- The connected MOKUKU's trips. -->
     <color name="connected_group">#0A9AD8C2</color>
     <color name="connected_border">#409AD8C2</color>

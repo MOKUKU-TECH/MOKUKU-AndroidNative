@@ -1027,6 +1027,7 @@ public final class MainActivity extends Activity {
         labels.setPadding(ui.dp(14), 0, ui.dp(8), 0);
         String start = tripStart(trip.log, "EEEdMMMjmm");
         String summary = tripDistance(trip.log) + " · " + tripDuration(trip.log);
+        if (trip.log.analysis.style != TripAnalysis.Style.TOO_SHORT) summary += " · " + trip.log.analysis.style.label;
         labels.addView(ui.text(start, 16, R.color.text_primary));
         labels.addView(ui.muted(summary));
         row.addView(labels, new LinearLayout.LayoutParams(0, -2, 1));
@@ -1050,22 +1051,100 @@ public final class MainActivity extends Activity {
         intro(tripStart(log, "EEEdMMMyyyy"), tripStart(log, "jmm") + " · " + trip.deviceName);
         tripMap(log);
         LinearLayout legend = ui.row();
-        legend.setPadding(ui.dp(4), ui.dp(12), 0, ui.dp(16));
+        legend.setPadding(ui.dp(4), ui.dp(12), 0, ui.dp(12));
         legend.addView(ui.text("○ Start", 13, R.color.accent));
         TextView end = ui.text("● End", 13, R.color.warm);
         end.setPadding(ui.dp(18), 0, 0, 0);
         legend.addView(end);
         content.addView(legend);
+        speedLegend();
+        TextView source = ui.muted("Route color: OBD speed, or GPS speed where OBD is unavailable.");
+        source.setPadding(ui.dp(4), ui.dp(8), 0, ui.dp(16));
+        content.addView(source);
         LinearLayout first = overviewRow();
         statistic(overviewColumn(first, true), "Distance", tripDistance(log));
         statistic(overviewColumn(first, false), "Duration", tripDuration(log));
         LinearLayout second = overviewRow();
         statistic(overviewColumn(second, true), "Average speed", Math.round(log.averageSpeedKmh()) + " km/h");
         statistic(overviewColumn(second, false), "Top GPS speed", Math.round(log.maximumGpsSpeedKmh) + " km/h");
+        tripDriving(log.analysis);
         content.addView(ui.muted("From " + trip.file.getName() + " · " + log.pointCount() + " GPS points recorded by MOKUKU."));
         phoneDeleteButton(content, "Delete from phone", () -> confirm("Delete this trip from the phone?",
                 trip.file.getName() + " from " + trip.deviceName + ". If it is still on MOKUKU, the next sync downloads it again.", "Delete",
                 () -> deletePhoneTrips(store -> store.delete(trip.file), "trips")));
+    }
+
+    private void tripDriving(TripAnalysis analysis) {
+        TextView heading = ui.text("Driving", 17, R.color.text_primary);
+        heading.setPadding(ui.dp(4), ui.dp(8), 0, ui.dp(12));
+        content.addView(heading);
+        LinearLayout style = ui.card(content);
+        style.addView(ui.muted("Driving style"));
+        ui.gap(style, 8);
+        style.addView(ui.text(analysis.style.label, 18, R.color.text_primary));
+        ui.gap(style, 6);
+        style.addView(ui.muted(analysis.style.description));
+        if (analysis.style != TripAnalysis.Style.TOO_SHORT) {
+            ui.gap(style, 10);
+            String cornering = analysis.yawRateKnown
+                    ? String.format(Locale.getDefault(), ", cornering %.1f m/s²", analysis.typicalLateralAcceleration) : "";
+            style.addView(ui.muted(String.format(Locale.getDefault(),
+                    "Typical acceleration %.1f m/s², braking %.1f m/s²%s. Stopped %d%% of the time.",
+                    analysis.typicalAcceleration, -analysis.typicalBraking, cornering, Math.round(analysis.idleShare * 100))));
+        }
+        LinearLayout events = ui.card(content);
+        events.addView(ui.muted("Harsh events"));
+        ui.gap(events, 10);
+        LinearLayout counts = ui.row();
+        harshCount(counts, analysis.harshAccelerations, "Acceleration");
+        harshCount(counts, analysis.harshBrakings, "Braking");
+        harshCount(counts, analysis.harshTurns, "Turns");
+        events.addView(counts);
+        ui.gap(events, 10);
+        events.addView(ui.muted(String.format(Locale.getDefault(),
+                "Counted from %.1f m/s² speeding up, %.1f m/s² braking, and %.1f m/s² sideways, using GPS speed and the IMU yaw rate.",
+                TripAnalysis.HARSH_ACCELERATION, -TripAnalysis.HARSH_BRAKING, TripAnalysis.HARSH_TURN)));
+    }
+
+    private void harshCount(LinearLayout row, int count, String title) {
+        LinearLayout column = ui.column();
+        column.addView(ui.text(String.valueOf(count), 18, R.color.text_primary));
+        column.addView(ui.text(title, 13, R.color.text_secondary));
+        column.setContentDescription(count + " harsh " + title.toLowerCase(Locale.ROOT));
+        row.addView(column, new LinearLayout.LayoutParams(0, -2, 1));
+    }
+
+    // Upper limits of the route's speed bands in km/h; the last band has none.
+    private static final int[] SPEED_BAND_LIMITS = {20, 40, 60, 90};
+    private static final int[] SPEED_COLORS = {R.color.speed_1, R.color.speed_2, R.color.speed_3, R.color.speed_4, R.color.speed_5};
+
+    private static int speedBand(double kmh) {
+        int band = 0;
+        while (band < SPEED_BAND_LIMITS.length && kmh >= SPEED_BAND_LIMITS[band]) band++;
+        return band;
+    }
+
+    private void speedLegend() {
+        LinearLayout legend = ui.row();
+        legend.setContentDescription("Route color shows speed, from blue under 20 km/h to red over 90 km/h");
+        for (int band = 0; band < SPEED_COLORS.length; band++) {
+            LinearLayout column = ui.column();
+            View swatch = new View(this);
+            swatch.setBackground(ui.background(SPEED_COLORS[band], SPEED_COLORS[band], 3));
+            column.addView(swatch, new LinearLayout.LayoutParams(-1, ui.dp(6)));
+            String label = band == 0 ? "<" + SPEED_BAND_LIMITS[0] : band == SPEED_BAND_LIMITS.length
+                    ? SPEED_BAND_LIMITS[band - 1] + "+" : SPEED_BAND_LIMITS[band - 1] + "–" + SPEED_BAND_LIMITS[band];
+            TextView text = ui.text(label, 12, R.color.text_secondary);
+            text.setPadding(0, ui.dp(4), 0, 0);
+            column.addView(text);
+            LinearLayout.LayoutParams parameters = new LinearLayout.LayoutParams(0, -2, 1);
+            if (band > 0) parameters.leftMargin = ui.dp(2);
+            legend.addView(column, parameters);
+        }
+        TextView unit = ui.text("km/h", 12, R.color.text_secondary);
+        unit.setPadding(ui.dp(8), ui.dp(8), 0, 0);
+        legend.addView(unit);
+        content.addView(legend);
     }
 
     private void statistic(LinearLayout parent, String title, String value) {
@@ -1096,14 +1175,20 @@ public final class MainActivity extends Activity {
         List<org.osmdroid.util.GeoPoint> points = new ArrayList<>();
         for (double[] point : log.latitudeLongitudes()) points.add(new org.osmdroid.util.GeoPoint(point[0], point[1]));
         if (points.isEmpty()) points.add(new org.osmdroid.util.GeoPoint(log.originLatitude, log.originLongitude));
-        org.osmdroid.views.overlay.Polyline route = new org.osmdroid.views.overlay.Polyline(map);
-        route.setPoints(points);
-        route.getOutlinePaint().setColor(ui.color(R.color.accent));
-        route.getOutlinePaint().setStrokeWidth(ui.dp(4));
-        route.getOutlinePaint().setStrokeCap(android.graphics.Paint.Cap.ROUND);
-        route.getOutlinePaint().setStrokeJoin(android.graphics.Paint.Join.ROUND);
-        route.setInfoWindow(null);
-        map.getOverlays().add(route);
+        // One polyline per run of points in the same speed band, colored by the speed at each segment's end.
+        for (int first = 0; first < points.size() - 1; ) {
+            int band = speedBand(log.speedKmh[first + 1]), last = first + 1;
+            while (last + 1 < points.size() && speedBand(log.speedKmh[last + 1]) == band) last++;
+            org.osmdroid.views.overlay.Polyline route = new org.osmdroid.views.overlay.Polyline(map);
+            route.setPoints(points.subList(first, last + 1));
+            route.getOutlinePaint().setColor(ui.color(SPEED_COLORS[band]));
+            route.getOutlinePaint().setStrokeWidth(ui.dp(4));
+            route.getOutlinePaint().setStrokeCap(android.graphics.Paint.Cap.ROUND);
+            route.getOutlinePaint().setStrokeJoin(android.graphics.Paint.Join.ROUND);
+            route.setInfoWindow(null);
+            map.getOverlays().add(route);
+            first = last;
+        }
         map.getOverlays().add(endpoint(points.get(0), true));
         map.getOverlays().add(endpoint(points.get(points.size() - 1), false));
         map.getOverlays().add(new org.osmdroid.views.overlay.CopyrightOverlay(this));

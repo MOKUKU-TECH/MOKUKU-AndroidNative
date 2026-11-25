@@ -25,7 +25,8 @@ Native Android previews, rendered with Robolectric in the disconnected state:
 Blank access-code dialogs: [390 dp](previews/native-access-code.png),
 [320 dp](previews/native-access-code-small.png).
 Sample trips: [Trips](previews/native-trips.png), [sync](previews/native-trips-sync.png), and
-[trip](previews/native-trip.png), whose map shows no tiles because tests have no network.
+[trip](previews/native-trip.png) with its [driving analysis](previews/native-trip-driving.png),
+whose map shows no tiles because tests have no network.
 Sample download-progress previews: [390 dp](previews/native-download.png),
 [320 dp](previews/native-download-small.png). These use simulated transfer values.
 All native previews validate layout only; they do not demonstrate a hardware connection.
@@ -219,19 +220,62 @@ recording**. MOKUKU saves the setting and starts with it off.
 Below, group the phone's trips by device: a heading with the device name, trip count, and BLE
 address in monospace, then the trips newest first. The connected MOKUKU's group comes first,
 tinted mint with a **Connected** label; other devices follow by their newest trip. Each row is a button with a small route
-thumbnail, the local start date and time, and distance · duration. Each group ends with
+thumbnail, the local start date and time, and distance · duration · driving style (omitted
+when the trip is too short to rate). Each group ends with
 **Delete N trips from phone** (destructive style), which confirms and removes that device's
 phone copies; it works disconnected but not during a sync. With no trips, show the
 empty state: **No trips on this phone yet**.
 
 Opening a trip shows the **Trip** subpage: the start date as the title, the start time and
 device below it, then the route drawn on an OpenStreetMap map, fitted to the trip, with a mint
-start ring and a warm end dot and a **Start** / **End** legend. The map pans and zooms and shows
+start ring and a warm end dot and a **Start** / **End** legend. The route is colored by speed
+in five bands (under 20, 20–40, 40–60, 60–90, and 90+ km/h), a rainbow from blue (slow)
+through cyan, green, and yellow to red (fast), with a swatch legend under the map. Each point uses OBD speed when the bridge
+reported one, otherwise GPS speed. The map pans and zooms and shows
 the OpenStreetMap attribution; without internet the route still draws over blank tiles. Below
-the map, a two-column grid shows distance, duration, average speed, and top GPS speed, then the
-source filename and **Delete from phone**, which confirms, deletes the phone copy, and returns
+the map, a two-column grid shows distance, duration, average speed, and top GPS speed. A
+**Driving** heading follows with two cards:
+
+- **Driving style:** one of **Smooth**, **Sporty**, **Aggressive**, **Eco**, or **Too short to
+  rate**, a one-line meaning, and the typical acceleration, braking, cornering (only with IMU
+  data), and share of time stopped.
+- **Harsh events:** acceleration, braking, and turn counts in three columns, with the thresholds.
+
+Then the source filename and **Delete from phone**, which confirms, deletes the phone copy, and returns
 to Trips. A deleted trip still on MOKUKU downloads again on the next sync. Draw the route only from records whose CRC passes; a trip cut short by power
 loss ends at its last good record.
+
+### Trip analysis
+
+The phone analyzes each trip from its 1 Hz points (`TripAnalysis`); firmware event flags are not
+used yet. Before measuring, it cleans recording glitches seen in real trips:
+
+- **Duplicate fixes:** a point under 0.5 s after the previous one is the same fix recorded twice; it is skipped.
+- **Missing speeds:** a speed repeated exactly once while moving, or a lone zero between moving
+  points, is replaced by interpolating its neighbors.
+
+Acceleration and braking are the speed change across two steps (at most 3 s), cornering is GPS
+speed times the IMU yaw rate, as the median of three neighboring points.
+
+| Harsh event | Threshold |
+|---|---|
+| Acceleration | ≥ 3.0 m/s² |
+| Braking | ≤ −3.5 m/s² |
+| Turn | ≥ 3.5 m/s² sideways |
+
+Consecutive points over a threshold count as one event. "Typical" values are the 95th
+percentile of acceleration and cornering and the 5th of braking, over points moving at least
+2 m/s. The style is the first rule that matches:
+
+| Style | Rule |
+|---|---|
+| Too short to rate | Under 1 km or under 60 moving samples |
+| Aggressive | At least 2 harsh events and at least 2 per 10 km |
+| Sporty | Any harsh event, or typical acceleration ≥ 1.8, braking ≤ −2.0, or cornering ≥ 2.2 m/s² |
+| Eco | Typical acceleration ≤ 1.0, braking ≥ −1.2, cornering ≤ 1.5 m/s², top speed ≤ 100 km/h, stopped ≤ 20% of the time |
+| Smooth | Otherwise |
+
+Eco is an estimate: trips record no fuel use or engine speed.
 
 ## Implementation after design review
 

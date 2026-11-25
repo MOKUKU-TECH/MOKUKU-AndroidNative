@@ -78,9 +78,12 @@ public class TripsPageTest {
             newest.performClick();
             content = activity.findViewById(R.id.content);
             assertNotNull(find(content, "Top GPS speed"));
+            assertNotNull(find(content, "Driving style"));
+            assertNotNull(find(content, "Eco"));
             assertNotNull(findDescription(content, "Map of the trip route"));
             assertEquals(View.GONE, activity.findViewById(R.id.navigation).getVisibility());
             save(activity.getWindow().getDecorView(), 0, "native-trip");
+            save(activity.getWindow().getDecorView(), 640, "native-trip-driving");
             activity.onBackPressed();
             assertNotNull(find(activity.findViewById(R.id.content), "Sync trips"));
         }
