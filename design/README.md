@@ -248,8 +248,14 @@ loss ends at its last good record.
 ### Trip analysis
 
 The phone analyzes each trip from its 1 Hz points (`TripAnalysis`); firmware event flags are not
-used yet. Acceleration and braking come from the change in GPS speed between points at most
-1.5 s apart, cornering from GPS speed times the IMU yaw rate.
+used yet. Before measuring, it cleans recording glitches seen in real trips:
+
+- **Duplicate fixes:** a point under 0.5 s after the previous one is the same fix recorded twice; it is skipped.
+- **Missing speeds:** a speed repeated exactly once while moving, or a lone zero between moving
+  points, is replaced by interpolating its neighbors.
+
+Acceleration and braking are the speed change across two steps (at most 3 s), cornering is GPS
+speed times the IMU yaw rate, as the median of three neighboring points.
 
 | Harsh event | Threshold |
 |---|---|

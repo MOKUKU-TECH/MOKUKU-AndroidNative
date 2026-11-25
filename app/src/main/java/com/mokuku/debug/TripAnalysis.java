@@ -13,8 +13,10 @@ final class TripAnalysis {
     static final double HARSH_ACCELERATION = 3.0;
     static final double HARSH_BRAKING = -3.5;
     static final double HARSH_TURN = 3.5;
-    // Points further apart than this span a GPS outage, so their speed change is not an acceleration.
-    private static final double MAXIMUM_STEP_SECONDS = 1.5;
+    // MOKUKU sometimes records one fix twice, tens of milliseconds apart; GPS fixes are 1 s apart.
+    private static final double DUPLICATE_SECONDS = 0.5;
+    // Acceleration is the speed change across two steps; a longer span crosses a GPS outage.
+    private static final double MAXIMUM_SPAN_SECONDS = 3;
     private static final double MOVING_METERS_PER_SECOND = 2;
     private static final double STOPPED_METERS_PER_SECOND = 1;
     private static final double MINIMUM_RATED_METERS = 1000;
@@ -47,36 +49,50 @@ final class TripAnalysis {
 
     /** timeSeconds and gpsSpeed (m/s) per point; yawRate in rad/s, NaN where the IMU was unavailable. */
     TripAnalysis(double[] timeSeconds, double[] gpsSpeed, double[] yawRate, double distanceMeters, double maximumSpeedKmh) {
-        List<Double> accelerations = new ArrayList<>(), lateral = new ArrayList<>();
+        List<Integer> kept = new ArrayList<>();
+        for (int i = 0; i < timeSeconds.length; i++) {
+            if (kept.isEmpty() || timeSeconds[i] - timeSeconds[kept.get(kept.size() - 1)] >= DUPLICATE_SECONDS) kept.add(i);
+        }
+        int count = kept.size();
+        double[] time = new double[count], speed = cleanSpeeds(kept, timeSeconds, gpsSpeed), lateral = new double[count];
+        for (int k = 0; k < count; k++) {
+            time[k] = timeSeconds[kept.get(k)];
+            double yaw = yawRate[kept.get(k)];
+            lateral[k] = Double.isNaN(yaw) ? Double.NaN : speed[k] * yaw;
+        }
+
+        List<Double> accelerations = new ArrayList<>(), lateralMoving = new ArrayList<>();
         int accelerating = 0, braking = 0, turning = 0;
         boolean wasAccelerating = false, wasBraking = false, wasTurning = false;
         double stoppedSeconds = 0;
-        for (int i = 0; i < timeSeconds.length; i++) {
-            double lateralAcceleration = Double.isNaN(yawRate[i]) ? 0 : gpsSpeed[i] * yawRate[i];
-            boolean turn = Math.abs(lateralAcceleration) >= HARSH_TURN;
+        for (int k = 0; k < count; k++) {
+            // The median of three neighbors ignores a single-sample yaw or speed spike.
+            double sideways = median(lateral, k);
+            boolean turn = !Double.isNaN(sideways) && Math.abs(sideways) >= HARSH_TURN;
             if (turn && !wasTurning) turning++;
             wasTurning = turn;
-            if (!Double.isNaN(yawRate[i]) && gpsSpeed[i] >= MOVING_METERS_PER_SECOND) lateral.add(Math.abs(lateralAcceleration));
-            if (i == 0) continue;
-            double step = timeSeconds[i] - timeSeconds[i - 1];
-            if (step <= 0 || step > MAXIMUM_STEP_SECONDS) { wasAccelerating = wasBraking = false; continue; }
-            if (gpsSpeed[i] < STOPPED_METERS_PER_SECOND) stoppedSeconds += step;
-            double acceleration = (gpsSpeed[i] - gpsSpeed[i - 1]) / step;
-            boolean accelerate = acceleration >= HARSH_ACCELERATION, brake = acceleration <= HARSH_BRAKING;
+            if (!Double.isNaN(sideways) && speed[k] >= MOVING_METERS_PER_SECOND) lateralMoving.add(Math.abs(sideways));
+            if (k > 0 && time[k] - time[k - 1] <= MAXIMUM_SPAN_SECONDS && speed[k] < STOPPED_METERS_PER_SECOND) stoppedSeconds += time[k] - time[k - 1];
+            boolean accelerate = false, brake = false;
+            if (k > 0 && k + 1 < count && time[k + 1] - time[k - 1] <= MAXIMUM_SPAN_SECONDS) {
+                double acceleration = (speed[k + 1] - speed[k - 1]) / (time[k + 1] - time[k - 1]);
+                accelerate = acceleration >= HARSH_ACCELERATION;
+                brake = acceleration <= HARSH_BRAKING;
+                if (Math.max(speed[k + 1], speed[k - 1]) >= MOVING_METERS_PER_SECOND) accelerations.add(acceleration);
+            }
             if (accelerate && !wasAccelerating) accelerating++;
             if (brake && !wasBraking) braking++;
             wasAccelerating = accelerate;
             wasBraking = brake;
-            if (Math.max(gpsSpeed[i], gpsSpeed[i - 1]) >= MOVING_METERS_PER_SECOND) accelerations.add(acceleration);
         }
         harshAccelerations = accelerating;
         harshBrakings = braking;
         harshTurns = turning;
         typicalAcceleration = percentile(accelerations, 95);
         typicalBraking = percentile(accelerations, 5);
-        typicalLateralAcceleration = percentile(lateral, 95);
-        yawRateKnown = !lateral.isEmpty();
-        double duration = timeSeconds.length == 0 ? 0 : timeSeconds[timeSeconds.length - 1] - timeSeconds[0];
+        typicalLateralAcceleration = percentile(lateralMoving, 95);
+        yawRateKnown = !lateralMoving.isEmpty();
+        double duration = count == 0 ? 0 : time[count - 1] - time[0];
         idleShare = duration > 0 ? stoppedSeconds / duration : 0;
 
         int harsh = harshEvents();
@@ -89,6 +105,45 @@ final class TripAnalysis {
     }
 
     int harshEvents() { return harshAccelerations + harshBrakings + harshTurns; }
+
+    /**
+     * GPS speeds of the kept points, with glitches replaced by interpolating between their neighbors:
+     * a speed repeated exactly once while moving (the receiver reported no new speed) and a lone zero
+     * between moving points.
+     */
+    private static double[] cleanSpeeds(List<Integer> kept, double[] timeSeconds, double[] gpsSpeed) {
+        int count = kept.size();
+        double[] time = new double[count], speed = new double[count];
+        for (int k = 0; k < count; k++) { time[k] = timeSeconds[kept.get(k)]; speed[k] = gpsSpeed[kept.get(k)]; }
+        boolean[] glitch = new boolean[count];
+        for (int k = 1; k < count; k++) {
+            // Only a single repeat: a longer run is a steady speed, or a stop.
+            boolean stale = speed[k] == speed[k - 1] && speed[k] > MOVING_METERS_PER_SECOND
+                    && (k < 2 || speed[k - 1] != speed[k - 2]) && (k + 1 == count || speed[k + 1] != speed[k]);
+            boolean dropped = k + 1 < count && speed[k] < STOPPED_METERS_PER_SECOND
+                    && speed[k - 1] >= MOVING_METERS_PER_SECOND && speed[k + 1] >= MOVING_METERS_PER_SECOND;
+            glitch[k] = stale || dropped;
+        }
+        double[] cleaned = speed.clone();
+        int previous = -1;
+        for (int k = 0; k < count; k++) {
+            if (!glitch[k]) { previous = k; continue; }
+            int next = k + 1;
+            while (next < count && glitch[next]) next++;
+            if (previous < 0 || next == count) continue;
+            cleaned[k] = speed[previous] + (speed[next] - speed[previous]) * (time[k] - time[previous]) / (time[next] - time[previous]);
+        }
+        return cleaned;
+    }
+
+    private static double median(double[] values, int index) {
+        int from = Math.max(0, index - 1), to = Math.min(values.length, index + 2);
+        List<Double> window = new ArrayList<>();
+        for (int i = from; i < to; i++) if (!Double.isNaN(values[i])) window.add(values[i]);
+        if (window.isEmpty()) return Double.NaN;
+        Collections.sort(window);
+        return window.get(window.size() / 2);
+    }
 
     private static double percentile(List<Double> values, int percent) {
         if (values.isEmpty()) return 0;

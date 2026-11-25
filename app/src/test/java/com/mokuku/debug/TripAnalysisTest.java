@@ -57,6 +57,23 @@ public class TripAnalysisTest {
         assertEquals(TripAnalysis.Style.SPORTY, analysis.style);
     }
 
+    @Test public void recordingGlitchesAreNotHarshEvents() {
+        // A steady 1 m/s² climb from 5 to 25 m/s, then cruising, with the glitches seen in real trips:
+        // a fix recorded twice 50 ms apart, a lone zero speed, and a speed repeated once then caught up.
+        java.util.List<double[]> points = new java.util.ArrayList<>();
+        for (int i = 0; i < 300; i++) {
+            double speed = Math.min(25, 5 + i) + 0.01 * (i % 7);
+            if (i == 100) speed = 0;
+            if (i == 150) speed = points.get(points.size() - 1)[1];
+            points.add(new double[] {i, speed});
+            if (i % 40 == 3) points.add(new double[] {i + 0.05, speed});
+        }
+        double[] time = new double[points.size()], speed = new double[points.size()], yaw = new double[points.size()];
+        for (int i = 0; i < time.length; i++) { time[i] = points.get(i)[0]; speed[i] = points.get(i)[1]; }
+        TripAnalysis analysis = new TripAnalysis(time, speed, yaw, 7000, 90);
+        assertEquals(0, analysis.harshEvents());
+    }
+
     @Test public void unknownYawRateAndGpsGapsAreIgnored() {
         double[] time = {0, 1, 10, 11}, speed = {10, 10, 0, 0}, yaw = {Double.NaN, Double.NaN, Double.NaN, Double.NaN};
         TripAnalysis analysis = new TripAnalysis(time, speed, yaw, 20, 36);
