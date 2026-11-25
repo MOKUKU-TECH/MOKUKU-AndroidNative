@@ -61,6 +61,10 @@ final class MokukuConnection {
     private static final long RECONNECT_WINDOW_MILLISECONDS = 5 * 60_000;
     private static final long RECONNECT_DELAY_MILLISECONDS = 3000;
     private static final long LEFT_EYE_UPDATE_DELAY_MILLISECONDS = 500;
+    // A connection attempt can fail while the link is being set up (Bluetooth 62 or 133) and
+    // succeed right after; the PC's BlueZ retries the same way.
+    private static final int CONNECT_RETRIES = 2;
+    private static final long CONNECT_RETRY_DELAY_MILLISECONDS = 1000;
     interface Listener { void changed(Snapshot snapshot); }
     private interface Reply { void complete(byte[] value, String error); }
     private interface Names { void complete(List<String> names, String error); }
@@ -233,6 +237,7 @@ final class MokukuConnection {
         }
     };
     private long reconnectUntil;
+    private int connectRetriesLeft;
     private final Runnable reconnect = () -> { if (gatt == null) openGatt(); };
     private final Runnable connectionTimeout = () -> disconnectOnWorker("Connection timed out. Try again.");
     private final Runnable requestTimeout = () -> {
@@ -354,6 +359,7 @@ final class MokukuConnection {
             mokukuII = MokukuProtocol.isMokukuII(name);
             recordingAccessCode = recordingAccessPreferences.getString(address, "");
             context.getSharedPreferences("device", Context.MODE_PRIVATE).edit().putString("address", address).putString("name", name).apply();
+            connectRetriesLeft = CONNECT_RETRIES;
             openGatt();
         });
     }
@@ -421,11 +427,23 @@ final class MokukuConnection {
         report(reason);
     }
 
+    private void retryConnection(int status) {
+        connectRetriesLeft--;
+        Log.i(TAG, "Connection attempt failed (Bluetooth " + status + "), retrying");
+        worker.removeCallbacks(connectionTimeout);
+        BluetoothGatt failed = gatt;
+        gatt = null;
+        subscriptions.clear();
+        try { failed.close(); } catch (SecurityException ignored) {}
+        worker.postDelayed(reconnect, CONNECT_RETRY_DELAY_MILLISECONDS);
+    }
+
     private final BluetoothGattCallback gattCallback = new BluetoothGattCallback() {
         @Override public void onConnectionStateChange(BluetoothGatt connection, int status, int newState) {
             worker.post(() -> {
                 if (connection != gatt) return;
                 if (status != BluetoothGatt.GATT_SUCCESS || newState == BluetoothProfile.STATE_DISCONNECTED) {
+                    if (!ready && connectRetriesLeft > 0) { retryConnection(status); return; }
                     disconnectOnWorker("MOKUKU disconnected" + (status == 0 ? "." : " (Bluetooth " + status + ").") + " Reconnect to refresh its information.");
                 } else if (newState == BluetoothProfile.STATE_CONNECTED) {
                     try {

@@ -129,6 +129,28 @@ public class MokukuConnectionTest {
         } finally { connection.close(); }
     }
 
+    @Test public void failedConnectionAttemptsAreRetriedThenReported() throws Exception {
+        MokukuConnection connection = connectedSession();
+        try {
+            BluetoothGattCallback callback = ReflectionHelpers.getField(connection, "gattCallback");
+            onWorker(connection, () -> {
+                ReflectionHelpers.setField(connection, "ready", false);
+                ReflectionHelpers.setField(connection, "connectRetriesLeft", 1);
+            });
+            BluetoothGatt first = ReflectionHelpers.getField(connection, "gatt");
+            callback.onConnectionStateChange(first, 62, android.bluetooth.BluetoothProfile.STATE_DISCONNECTED);
+            onWorker(connection, () -> {});
+            assertNull(ReflectionHelpers.getField(connection, "gatt"));
+            assertFalse(connection.snapshot().message.startsWith("MOKUKU disconnected"));
+
+            BluetoothGatt second = ShadowBluetoothGatt.newInstance(ShadowBluetoothDevice.newInstance("AA:BB:CC:DD:EE:FF"));
+            onWorker(connection, () -> ReflectionHelpers.setField(connection, "gatt", second));
+            callback.onConnectionStateChange(second, 62, android.bluetooth.BluetoothProfile.STATE_DISCONNECTED);
+            onWorker(connection, () -> {});
+            assertEquals("MOKUKU disconnected (Bluetooth 62). Reconnect to refresh its information.", connection.snapshot().message);
+        } finally { connection.close(); }
+    }
+
     // Replies to each command write as the original MOKUKU's left eye does.
     @SuppressWarnings("deprecation")
     private CountDownLatch acceptCommands(MokukuConnection connection, List<byte[]> writes, int count, List<Long> times) {
