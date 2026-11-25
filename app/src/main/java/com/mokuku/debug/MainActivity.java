@@ -1027,6 +1027,7 @@ public final class MainActivity extends Activity {
         labels.setPadding(ui.dp(14), 0, ui.dp(8), 0);
         String start = tripStart(trip.log, "EEEdMMMjmm");
         String summary = tripDistance(trip.log) + " · " + tripDuration(trip.log);
+        if (trip.log.analysis.style != TripAnalysis.Style.TOO_SHORT) summary += " · " + trip.log.analysis.style.label;
         labels.addView(ui.text(start, 16, R.color.text_primary));
         labels.addView(ui.muted(summary));
         row.addView(labels, new LinearLayout.LayoutParams(0, -2, 1));
@@ -1062,10 +1063,51 @@ public final class MainActivity extends Activity {
         LinearLayout second = overviewRow();
         statistic(overviewColumn(second, true), "Average speed", Math.round(log.averageSpeedKmh()) + " km/h");
         statistic(overviewColumn(second, false), "Top GPS speed", Math.round(log.maximumGpsSpeedKmh) + " km/h");
+        tripDriving(log.analysis);
         content.addView(ui.muted("From " + trip.file.getName() + " · " + log.pointCount() + " GPS points recorded by MOKUKU."));
         phoneDeleteButton(content, "Delete from phone", () -> confirm("Delete this trip from the phone?",
                 trip.file.getName() + " from " + trip.deviceName + ". If it is still on MOKUKU, the next sync downloads it again.", "Delete",
                 () -> deletePhoneTrips(store -> store.delete(trip.file), "trips")));
+    }
+
+    private void tripDriving(TripAnalysis analysis) {
+        TextView heading = ui.text("Driving", 17, R.color.text_primary);
+        heading.setPadding(ui.dp(4), ui.dp(8), 0, ui.dp(12));
+        content.addView(heading);
+        LinearLayout style = ui.card(content);
+        style.addView(ui.muted("Driving style"));
+        ui.gap(style, 8);
+        style.addView(ui.text(analysis.style.label, 18, R.color.text_primary));
+        ui.gap(style, 6);
+        style.addView(ui.muted(analysis.style.description));
+        if (analysis.style != TripAnalysis.Style.TOO_SHORT) {
+            ui.gap(style, 10);
+            String cornering = analysis.yawRateKnown
+                    ? String.format(Locale.getDefault(), ", cornering %.1f m/s²", analysis.typicalLateralAcceleration) : "";
+            style.addView(ui.muted(String.format(Locale.getDefault(),
+                    "Typical acceleration %.1f m/s², braking %.1f m/s²%s. Stopped %d%% of the time.",
+                    analysis.typicalAcceleration, -analysis.typicalBraking, cornering, Math.round(analysis.idleShare * 100))));
+        }
+        LinearLayout events = ui.card(content);
+        events.addView(ui.muted("Harsh events"));
+        ui.gap(events, 10);
+        LinearLayout counts = ui.row();
+        harshCount(counts, analysis.harshAccelerations, "Acceleration");
+        harshCount(counts, analysis.harshBrakings, "Braking");
+        harshCount(counts, analysis.harshTurns, "Turns");
+        events.addView(counts);
+        ui.gap(events, 10);
+        events.addView(ui.muted(String.format(Locale.getDefault(),
+                "Counted from %.1f m/s² speeding up, %.1f m/s² braking, and %.1f m/s² sideways, using GPS speed and the IMU yaw rate.",
+                TripAnalysis.HARSH_ACCELERATION, -TripAnalysis.HARSH_BRAKING, TripAnalysis.HARSH_TURN)));
+    }
+
+    private void harshCount(LinearLayout row, int count, String title) {
+        LinearLayout column = ui.column();
+        column.addView(ui.text(String.valueOf(count), 18, R.color.text_primary));
+        column.addView(ui.text(title, 13, R.color.text_secondary));
+        column.setContentDescription(count + " harsh " + title.toLowerCase(Locale.ROOT));
+        row.addView(column, new LinearLayout.LayoutParams(0, -2, 1));
     }
 
     private void statistic(LinearLayout parent, String title, String value) {

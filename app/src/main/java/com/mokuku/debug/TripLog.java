@@ -24,6 +24,7 @@ final class TripLog {
     final long durationMilliseconds;
     final double distanceMeters;
     final double maximumGpsSpeedKmh;
+    final TripAnalysis analysis;
 
     private TripLog(ByteBuffer header, ByteBuffer points, int count) {
         startUnixMilliseconds = header.getLong(9);
@@ -33,18 +34,24 @@ final class TripLog {
         eastMeters = new double[count];
         northMeters = new double[count];
         upMeters = new double[count];
+        double[] timeSeconds = new double[count], gpsSpeed = new double[count], yawRate = new double[count];
         double distance = 0, maximumSpeed = 0;
         for (int i = 0; i < count; i++) {
             int record = i * POINT_SIZE;
+            timeSeconds[i] = (points.getInt(record + 1) & 0xffffffffL) / 1000.0;
             eastMeters[i] = points.getInt(record + 5) / 10.0;
             northMeters[i] = points.getInt(record + 9) / 10.0;
             upMeters[i] = points.getInt(record + 13) / 10.0;
-            maximumSpeed = Math.max(maximumSpeed, (points.getShort(record + 17) & 0xffff) * 0.036);
+            gpsSpeed[i] = (points.getShort(record + 17) & 0xffff) / 100.0;
+            maximumSpeed = Math.max(maximumSpeed, gpsSpeed[i] * 3.6);
+            short yaw = points.getShort(record + 20);
+            yawRate[i] = yaw == Short.MIN_VALUE ? Double.NaN : yaw / 1000.0;
             if (i > 0) distance += Math.hypot(eastMeters[i] - eastMeters[i - 1], northMeters[i] - northMeters[i - 1]);
         }
         durationMilliseconds = count == 0 ? 0 : points.getInt((count - 1) * POINT_SIZE + 1) & 0xffffffffL;
         distanceMeters = distance;
         maximumGpsSpeedKmh = maximumSpeed;
+        analysis = new TripAnalysis(timeSeconds, gpsSpeed, yawRate, distance, maximumSpeed);
     }
 
     /** Latitude and longitude in degrees of each point, for the map. */
