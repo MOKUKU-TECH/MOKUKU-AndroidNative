@@ -1126,7 +1126,7 @@ public final class MainActivity extends Activity {
 
     private void speedLegend() {
         LinearLayout legend = ui.row();
-        legend.setContentDescription("Route color shows speed: brighter is faster, from under 20 to over 90 km/h");
+        legend.setContentDescription("Route color shows speed, from blue under 20 km/h to red over 90 km/h");
         for (int band = 0; band < SPEED_COLORS.length; band++) {
             LinearLayout column = ui.column();
             View swatch = new View(this);
