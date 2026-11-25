@@ -54,7 +54,8 @@ see [MOKUKU II](#mokuku-ii).
   ([format](../doc/TRIP_RECORDING.md) in MobiliMOKUKU) that the phone lacks, and the
   rest of the phone's newest trip from it, which MOKUKU may still have been recording.
   Trips stay in app-private storage, grouped by BLE address, with the connected
-  MOKUKU first. Open a trip to see its route on an OpenStreetMap map with distance,
+  MOKUKU first. Open a trip to see its route on an OpenStreetMap map, colored by speed (OBD, or GPS
+  without it), with distance,
   duration, speeds, harsh acceleration, braking, and turn counts, and a driving style
   (Smooth, Sporty, Aggressive, or Eco). **Delete older trips on MOKUKU** syncs, then deletes every
   trip on MOKUKU's SD card except the latest; nothing is deleted if any trip fails to

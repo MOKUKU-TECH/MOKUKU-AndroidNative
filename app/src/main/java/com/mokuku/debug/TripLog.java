@@ -21,6 +21,8 @@ final class TripLog {
     final double[] eastMeters;
     final double[] northMeters;
     final double[] upMeters;
+    // OBD speed where the bridge reported one, otherwise GPS speed.
+    final double[] speedKmh;
     final long durationMilliseconds;
     final double distanceMeters;
     final double maximumGpsSpeedKmh;
@@ -34,6 +36,7 @@ final class TripLog {
         eastMeters = new double[count];
         northMeters = new double[count];
         upMeters = new double[count];
+        speedKmh = new double[count];
         double[] timeSeconds = new double[count], gpsSpeed = new double[count], yawRate = new double[count];
         double distance = 0, maximumSpeed = 0;
         for (int i = 0; i < count; i++) {
@@ -44,6 +47,8 @@ final class TripLog {
             upMeters[i] = points.getInt(record + 13) / 10.0;
             gpsSpeed[i] = (points.getShort(record + 17) & 0xffff) / 100.0;
             maximumSpeed = Math.max(maximumSpeed, gpsSpeed[i] * 3.6);
+            int obdSpeed = points.get(record + 19) & 0xff;
+            speedKmh[i] = obdSpeed == 255 ? gpsSpeed[i] * 3.6 : obdSpeed;
             short yaw = points.getShort(record + 20);
             yawRate[i] = yaw == Short.MIN_VALUE ? Double.NaN : yaw / 1000.0;
             if (i > 0) distance += Math.hypot(eastMeters[i] - eastMeters[i - 1], northMeters[i] - northMeters[i - 1]);

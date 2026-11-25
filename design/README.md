@@ -228,7 +228,10 @@ empty state: **No trips on this phone yet**.
 
 Opening a trip shows the **Trip** subpage: the start date as the title, the start time and
 device below it, then the route drawn on an OpenStreetMap map, fitted to the trip, with a mint
-start ring and a warm end dot and a **Start** / **End** legend. The map pans and zooms and shows
+start ring and a warm end dot and a **Start** / **End** legend. The route is colored by speed
+in five bands (under 20, 20–40, 40–60, 60–90, and 90+ km/h), one mint hue that brightens as
+speed rises, with a swatch legend under the map. Each point uses OBD speed when the bridge
+reported one, otherwise GPS speed. The map pans and zooms and shows
 the OpenStreetMap attribution; without internet the route still draws over blank tiles. Below
 the map, a two-column grid shows distance, duration, average speed, and top GPS speed. A
 **Driving** heading follows with two cards:
